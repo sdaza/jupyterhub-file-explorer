@@ -3,7 +3,7 @@
   "displayName": "JupyterHub File Explorer",
   "description": "Browse and edit files on a remote Jupyter Server.",
   "version": "0.0.1",
-  "publisher": "sdaza",
+  "publisher": "SebastianDazaAranzaes",
   "engines": {
     "vscode": "^1.60.0"
   },
