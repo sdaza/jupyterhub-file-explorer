@@ -9,6 +9,7 @@ export class FileExplorerProvider implements vscode.TreeDataProvider<FileItem>, 
     private jupyterToken: string = '';
     private remotePath: string = '/';
     private axiosInstance: AxiosInstance | null = null;
+    private isConnected: boolean = false;
 
     private _emitter = new vscode.EventEmitter<vscode.FileChangeEvent[]>();
     readonly onDidChangeFile: vscode.Event<vscode.FileChangeEvent[]> = this._emitter.event;
@@ -40,11 +41,18 @@ export class FileExplorerProvider implements vscode.TreeDataProvider<FileItem>, 
         // The remote path is now part of the base URL, so we browse from its root.
         this.remotePath = '/'; 
         this.setupAxiosInstance();
+        this.isConnected = true;
+        this.refresh();
+    }
+
+    disconnect() {
+        this.axiosInstance = null;
+        this.isConnected = false;
         this.refresh();
     }
 
     refresh(): void {
-        this._onDidChangeTreeData.fire();
+        this._onDidChangeTreeData.fire(null);
     }
 
     getTreeItem(element: FileItem): vscode.TreeItem {
@@ -61,8 +69,7 @@ export class FileExplorerProvider implements vscode.TreeDataProvider<FileItem>, 
     }
 
     async getChildren(element?: FileItem): Promise<FileItem[]> {
-        if (!this.axiosInstance) {
-            vscode.window.showErrorMessage('Not connected to Jupyter Server.');
+        if (!this.isConnected || !this.axiosInstance) {
             return [];
         }
 
@@ -92,7 +99,7 @@ export class FileExplorerProvider implements vscode.TreeDataProvider<FileItem>, 
     }
 
     async openFile(filePath: string) {
-        if (!this.axiosInstance) {
+        if (!this.isConnected || !this.axiosInstance) {
             vscode.window.showErrorMessage('Not connected to Jupyter Server.');
             return;
         }
@@ -114,7 +121,7 @@ export class FileExplorerProvider implements vscode.TreeDataProvider<FileItem>, 
     }
 
     private async fetchFileContent(filePath: string): Promise<string> {
-        if (!this.axiosInstance) {
+        if (!this.isConnected || !this.axiosInstance) {
             throw new Error('Not connected to Jupyter Server.');
         }
 
@@ -144,7 +151,7 @@ export class FileExplorerProvider implements vscode.TreeDataProvider<FileItem>, 
     }
 
     public async saveFileToJupyter(filePath: string, content: string) {
-        if (!this.axiosInstance) {
+        if (!this.isConnected || !this.axiosInstance) {
             vscode.window.showErrorMessage('Not connected to Jupyter Server.');
             return;
         }
@@ -184,14 +191,16 @@ export class FileExplorerProvider implements vscode.TreeDataProvider<FileItem>, 
     }
 
     async createDirectory(uri: vscode.Uri): Promise<void> {
-        if (!this.axiosInstance) {
+        if (!this.isConnected || !this.axiosInstance) {
             throw vscode.FileSystemError.NoPermissions('Not connected to Jupyter Server.');
         }
         const path = uri.path.startsWith('/') ? uri.path.substring(1) : uri.path;
         const apiUrl = `api/contents/${path}`;
         try {
             await this.axiosInstance.put(apiUrl, { type: 'directory', content: null });
-            this.refresh();
+            const parentUri = vscode.Uri.parse(`jupyter-remote:${this.extractParentPath(uri.path)}`);
+            this._emitter.fire([{ type: vscode.FileChangeType.Created, uri }]);
+            this._emitter.fire([{ type: vscode.FileChangeType.Changed, uri: parentUri }]);
         } catch (error) {
             vscode.window.showErrorMessage(`Failed to create directory: ${error}`);
             throw vscode.FileSystemError.Unavailable(`Failed to create directory: ${error}`);
@@ -199,28 +208,57 @@ export class FileExplorerProvider implements vscode.TreeDataProvider<FileItem>, 
     }
 
     async readFile(uri: vscode.Uri): Promise<Uint8Array> {
+        if (!this.isConnected || !this.axiosInstance) {
+            throw new Error('Not connected to Jupyter Server.');
+        }
         const content = await this.fetchFileContent(uri.path.slice(1));
         return Buffer.from(content);
     }
 
     async writeFile(uri: vscode.Uri, content: Uint8Array, options: { create: boolean; overwrite: boolean; }): Promise<void> {
-        if (!this.axiosInstance) {
+        if (!this.isConnected || !this.axiosInstance) {
             throw vscode.FileSystemError.NoPermissions('Not connected to Jupyter Server.');
         }
         const path = uri.path.startsWith('/') ? uri.path.substring(1) : uri.path;
         await this.saveFileToJupyter(path, content.toString());
-        this._emitter.fire([{ type: vscode.FileChangeType.Changed, uri }]);
+        const parentUri = vscode.Uri.parse(`jupyter-remote:${this.extractParentPath(uri.path)}`);
+        this._emitter.fire([{ type: options.create ? vscode.FileChangeType.Created : vscode.FileChangeType.Changed, uri }]);
+        this._emitter.fire([{ type: vscode.FileChangeType.Changed, uri: parentUri }]);
     }
 
     async delete(uri: vscode.Uri, options: { recursive: boolean; }): Promise<void> {
-        if (!this.axiosInstance) {
+        if (!this.isConnected || !this.axiosInstance) {
             throw vscode.FileSystemError.NoPermissions('Not connected to Jupyter Server.');
         }
-        const path = uri.path.startsWith('/') ? uri.path.substring(1) : uri.path;
-        const apiUrl = `api/contents/${path}`;
+    
+        const itemPath = uri.path.startsWith('/') ? uri.path.substring(1) : uri.path;
+        
+        let itemStat;
+        try {
+            const statUrl = `api/contents/${itemPath}?t=${new Date().getTime()}`;
+            const response = await this.axiosInstance.get(statUrl);
+            itemStat = response.data;
+        } catch (error) {
+            // If it doesn't exist, we can't delete it.
+            vscode.window.showErrorMessage(`Failed to get info for deletion: ${error}`);
+            throw vscode.FileSystemError.FileNotFound(uri);
+        }
+    
+        if (itemStat.type === 'directory') {
+            const children = await this.getChildren(new FileItem(itemStat.name, true, itemStat.path));
+            for (const child of children) {
+                const childUri = vscode.Uri.parse(`jupyter-remote:/${child.uri}`);
+                await this.delete(childUri, { recursive: true });
+            }
+        }
+    
+        const apiUrl = `api/contents/${itemPath}`;
         try {
             await this.axiosInstance.delete(apiUrl);
-            this.refresh();
+            const parentUri = vscode.Uri.parse(`jupyter-remote:${this.extractParentPath(uri.path)}`);
+            this._emitter.fire([{ type: vscode.FileChangeType.Deleted, uri }]);
+            this._emitter.fire([{ type: vscode.FileChangeType.Changed, uri: parentUri }]);
+    
         } catch (error) {
             vscode.window.showErrorMessage(`Failed to delete: ${error}`);
             throw vscode.FileSystemError.Unavailable(`Failed to delete: ${error}`);
@@ -228,7 +266,7 @@ export class FileExplorerProvider implements vscode.TreeDataProvider<FileItem>, 
     }
 
     async rename(oldUri: vscode.Uri, newUri: vscode.Uri, options: { overwrite: boolean; }): Promise<void> {
-        if (!this.axiosInstance) {
+        if (!this.isConnected || !this.axiosInstance) {
             throw vscode.FileSystemError.NoPermissions('Not connected to Jupyter Server.');
         }
         const oldPath = oldUri.path.startsWith('/') ? oldUri.path.substring(1) : oldUri.path;
@@ -236,7 +274,16 @@ export class FileExplorerProvider implements vscode.TreeDataProvider<FileItem>, 
         const apiUrl = `api/contents/${oldPath}`;
         try {
             await this.axiosInstance.patch(apiUrl, { path: newPath });
-            this.refresh();
+            const oldParentUri = vscode.Uri.parse(`jupyter-remote:${this.extractParentPath(oldUri.path)}`);
+            const newParentUri = vscode.Uri.parse(`jupyter-remote:${this.extractParentPath(newUri.path)}`);
+            this._emitter.fire([
+                { type: vscode.FileChangeType.Deleted, uri: oldUri },
+                { type: vscode.FileChangeType.Created, uri: newUri }
+            ]);
+            this._emitter.fire([{ type: vscode.FileChangeType.Changed, uri: oldParentUri }]);
+            if (oldParentUri.path !== newParentUri.path) {
+                this._emitter.fire([{ type: vscode.FileChangeType.Changed, uri: newParentUri }]);
+            }
         } catch (error) {
             vscode.window.showErrorMessage(`Failed to rename: ${error}`);
             throw vscode.FileSystemError.Unavailable(`Failed to rename: ${error}`);

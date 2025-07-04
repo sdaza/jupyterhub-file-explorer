@@ -15,14 +15,26 @@ export function activate(context: vscode.ExtensionContext) {
     vscode.window.createTreeView('jupyterFileExplorer', { treeDataProvider: fileExplorerProvider });
 
     const connectToJupyter = async (url: string, token: string, remotePath: string) => {
-        await fileExplorerProvider.setConnection(url, token, remotePath || '/');
-        const axiosInstance = fileExplorerProvider.getAxiosInstance();
-        if (axiosInstance) {
-            jupyterContentProvider.setAxiosInstance(axiosInstance);
-            vscode.window.showInformationMessage('Connected to Jupyter Server.');
-        } else {
-            vscode.window.showErrorMessage('Failed to create Axios instance.');
+        try {
+            await fileExplorerProvider.setConnection(url, token, remotePath || '/');
+            const axiosInstance = fileExplorerProvider.getAxiosInstance();
+            if (axiosInstance) {
+                jupyterContentProvider.setAxiosInstance(axiosInstance);
+                vscode.commands.executeCommand('setContext', 'jupyterFileExplorer.connected', true);
+                vscode.window.showInformationMessage('Connected to Jupyter Server.');
+            } else {
+                throw new Error('Failed to create Axios instance.');
+            }
+        } catch (error) {
+            vscode.commands.executeCommand('setContext', 'jupyterFileExplorer.connected', false);
+            vscode.window.showErrorMessage(`Failed to connect to Jupyter Server: ${error}`);
         }
+    };
+
+    const disconnectFromJupyter = () => {
+        fileExplorerProvider.disconnect();
+        vscode.commands.executeCommand('setContext', 'jupyterFileExplorer.connected', false);
+        vscode.window.showInformationMessage('Disconnected from Jupyter Server.');
     };
 
     let connectDisposable = vscode.commands.registerCommand('jupyterFileExplorer.connectJupyter', async () => {
@@ -110,6 +122,8 @@ export function activate(context: vscode.ExtensionContext) {
         }
     });
 
+    let disconnectDisposable = vscode.commands.registerCommand('jupyterFileExplorer.disconnect', disconnectFromJupyter);
+
     let refreshDisposable = vscode.commands.registerCommand('jupyterFileExplorer.refreshJupyterExplorer', () => {
         fileExplorerProvider.refresh();
     });
@@ -144,6 +158,7 @@ export function activate(context: vscode.ExtensionContext) {
         addConnectionDisposable,
         selectConnectionDisposable,
         removeConnectionDisposable,
+        disconnectDisposable,
         refreshDisposable,
         newFileDisposable,
         newFolderDisposable,
@@ -152,6 +167,9 @@ export function activate(context: vscode.ExtensionContext) {
         openFileDisposable
     );
     context.subscriptions.push(vscode.workspace.registerTextDocumentContentProvider('jupyter-remote', jupyterContentProvider));
+
+    // Set initial context
+    vscode.commands.executeCommand('setContext', 'jupyterFileExplorer.connected', false);
 }
 
 export function deactivate() {}
