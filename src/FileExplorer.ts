@@ -68,6 +68,10 @@ export class FileExplorerProvider implements vscode.TreeDataProvider<FileItem>, 
         });
     }
 
+    public getAxiosInstance(): AxiosInstance | null {
+        return this.axiosInstance;
+    }
+
     async getChildren(element?: FileItem): Promise<FileItem[]> {
         if (!this.isConnected || !this.axiosInstance) {
             return [];
@@ -169,15 +173,13 @@ export class FileExplorerProvider implements vscode.TreeDataProvider<FileItem>, 
         }
     }
 
-    public getAxiosInstance(): AxiosInstance | null {
-        return this.axiosInstance;
-    }
-
     watch(uri: vscode.Uri, options: { recursive: boolean; excludes: string[]; }): vscode.Disposable {
+        // For now, we don't support watching files.
         return new vscode.Disposable(() => {});
     }
 
     stat(uri: vscode.Uri): vscode.FileStat {
+        // This is a simplified stat. A real implementation would query the server.
         return {
             type: vscode.FileType.File,
             ctime: Date.now(),
@@ -187,12 +189,13 @@ export class FileExplorerProvider implements vscode.TreeDataProvider<FileItem>, 
     }
 
     readDirectory(uri: vscode.Uri): [string, vscode.FileType][] | Thenable<[string, vscode.FileType][]> {
+        // This method should be implemented to read directories for the FileSystemProvider.
         throw vscode.FileSystemError.NoPermissions();
     }
 
     async createDirectory(uri: vscode.Uri): Promise<void> {
         if (!this.isConnected || !this.axiosInstance) {
-            throw vscode.FileSystemError.NoPermissions('Not connected to Jupyter Server.');
+            throw new Error('Not connected to Jupyter Server.');
         }
         const path = uri.path.startsWith('/') ? uri.path.substring(1) : uri.path;
         const apiUrl = `api/contents/${path}`;
@@ -233,25 +236,6 @@ export class FileExplorerProvider implements vscode.TreeDataProvider<FileItem>, 
     
         const itemPath = uri.path.startsWith('/') ? uri.path.substring(1) : uri.path;
         
-        let itemStat;
-        try {
-            const statUrl = `api/contents/${itemPath}?t=${new Date().getTime()}`;
-            const response = await this.axiosInstance.get(statUrl);
-            itemStat = response.data;
-        } catch (error) {
-            // If it doesn't exist, we can't delete it.
-            vscode.window.showErrorMessage(`Failed to get info for deletion: ${error}`);
-            throw vscode.FileSystemError.FileNotFound(uri);
-        }
-    
-        if (itemStat.type === 'directory') {
-            const children = await this.getChildren(new FileItem(itemStat.name, true, itemStat.path));
-            for (const child of children) {
-                const childUri = vscode.Uri.parse(`jupyter-remote:/${child.uri}`);
-                await this.delete(childUri, { recursive: true });
-            }
-        }
-    
         const apiUrl = `api/contents/${itemPath}`;
         try {
             await this.axiosInstance.delete(apiUrl);
