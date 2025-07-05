@@ -1,36 +1,47 @@
-# Jupyter File Explorer
+# JupyterHub File Explorer
 
-Jupyter File Explorer is a Visual Studio Code extension that allows you to browse and manage files on a remote Jupyter Server directly from your VS Code environment.
+JupyterHub File Explorer is a Visual Studio Code extension that allows you to browse and manage files on a remote Jupyter Server directly from your VS Code environment.
 
 ## Features
 
-- **Multi-Connection Management**: Save and quickly switch between multiple Jupyter Server connections.
+- **Intuitive Connection Management**: A clear connect/disconnect flow with a welcome screen to guide you.
+- **Save Multiple Connections**: Save and quickly switch between multiple Jupyter Server configurations.
 - **Full File Operations**: Create, read, update, delete, and rename files and folders on the remote server.
-- **Seamless Editing**: Open and edit remote files directly in VS Code, just like local files.
-- **Context Menus**: Right-click on files and folders for quick access to all file operations.
+- **Seamless Editing**: Open and edit remote files directly in VS Code.
+- **Context-Aware UI**: Buttons and menus appear only when they are relevant.
 
 ## Installation
 
 1. Open Visual Studio Code.
 2. Go to the Extensions view (`Ctrl+Shift+X`).
-3. Search for "Jupyter File Explorer" and click **Install**.
+3. Search for "JupyterHub File Explorer" and click **Install**.
 
 ## Usage
+
+### Connecting to a Server
+
+- When you first open the **Jupyter Files** view, you will see a welcome message with options to connect.
+- Click the **Connect** button (plug icon) in the view's title bar, or use the Command Palette (`Ctrl+Shift+P`).
+- You will be prompted to select from your saved connections or add a new one.
 
 ### Managing Connections
 
 All connection commands can be accessed from the Command Palette (`Ctrl+Shift+P`):
 
-1.  **`Jupyter: Add New Jupyter Connection`**: Prompts you to enter a name, URL, token, and remote path for a new server connection.
-2.  **`Jupyter: Select Jupyter Connection`**: Shows a list of your saved connections, allowing you to switch the explorer to a different server.
-3.  **`Jupyter: Remove Jupyter Connection`**: Shows a list of your saved connections to choose one to remove.
+- **`JHE: Add New Jupyter Connection`**: Prompts you to enter a name, URL, token, and remote path for a new server connection.
+- **`JHE: Select Jupyter Connection`**: Shows a list of your saved connections, allowing you to switch the explorer to a different server.
+- **`JHE: Remove Jupyter Connection`**: Shows a list of your saved connections to choose one to remove.
+- **`JHE: Disconnect from Jupyter Server`**: Disconnects from the current server. You can also click the **Disconnect** button (sign-out icon) in the view's title bar.
 
-### Exploring Files
+### Exploring and Managing Files
 
-- Once a connection is selected, the **Jupyter Files** explorer view will appear in the sidebar, showing the remote file structure.
-- Use the **Refresh** icon in the view's title bar to reload the file list.
-- Use the **New File** and **New Folder** icons to create items at the root of your connected path.
-- Right-click on any file or folder to open, rename, or delete it.
+- Once connected, the file explorer will show the contents of your remote path.
+- **View Title Bar**:
+    - **Disconnect**: Disconnects from the current server.
+    - **Refresh**: Reloads the file and folder list.
+    - **New File**: Creates a new file in the current directory.
+    - **New Folder**: Creates a new folder in the current directory.
+- **Context Menus**: Right-click on a file or folder to access actions like `Rename` and `Delete`.
 
 ## Configuration
 

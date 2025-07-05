@@ -29,20 +29,20 @@
   "contributes": {
     "commands": [
       {
-        "command": "jupyterFileExplorer.connectJupyter",
-        "title": "Connect to Jupyter Server"
-      },
-      {
         "command": "jupyterFileExplorer.addJupyterConnection",
-        "title": "Add New Jupyter Connection"
+        "title": "JHE: Add New Jupyter Connection"
       },
       {
         "command": "jupyterFileExplorer.selectJupyterConnection",
-        "title": "Select Jupyter Connection"
+        "title": "JHE: Select Jupyter Connection"
       },
       {
         "command": "jupyterFileExplorer.removeJupyterConnection",
-        "title": "Remove Jupyter Connection"
+        "title": "JHE: Remove Jupyter Connection"
+      },
+      {
+        "command": "jupyterFileExplorer.disconnectJupyter",
+        "title": "JHE: Disconnect from Jupyter Server"
       },
       {
         "command": "jupyterFileExplorer.refreshJupyterExplorer",
@@ -71,20 +71,33 @@
     "menus": {
       "view/title": [
         {
+          "command": "jupyterFileExplorer.selectJupyterConnection",
+          "when": "!jupyterFileExplorer.connected",
+          "group": "navigation",
+          "icon": "$(plug)"
+        },
+        {
+          "command": "jupyterFileExplorer.disconnectJupyter",
+          "when": "jupyterFileExplorer.connected",
+          "group": "navigation",
+          "icon": "$(sign-out)"
+        },
+        {
           "command": "jupyterFileExplorer.refreshJupyterExplorer",
-          "when": "view == jupyterFileExplorer",
-          "group": "navigation"
+          "when": "view == jupyterFileExplorer && jupyterFileExplorer.connected",
+          "group": "navigation@1",
+          "icon": "$(sync)"
         },
         {
           "command": "jupyterFileExplorer.newFile",
-          "when": "view == jupyterFileExplorer",
-          "group": "navigation@1",
+          "when": "view == jupyterFileExplorer && jupyterFileExplorer.connected",
+          "group": "navigation@2",
           "icon": "$(new-file)"
         },
         {
           "command": "jupyterFileExplorer.newFolder",
-          "when": "view == jupyterFileExplorer",
-          "group": "navigation@2",
+          "when": "view == jupyterFileExplorer && jupyterFileExplorer.connected",
+          "group": "navigation@3",
           "icon": "$(new-folder)"
         }
       ],
@@ -115,10 +128,18 @@
       "explorer": [
         {
           "id": "jupyterFileExplorer",
-          "name": "Jupyter Files"
+          "name": "Jupyter Files",
+          "icon": "images/jupyter.png"
         }
       ]
     },
+    "viewsWelcome": [
+      {
+        "view": "jupyterFileExplorer",
+        "when": "!jupyterFileExplorer.connected",
+        "contents": "Not connected to a Jupyter Server.\n[Select a saved connection](command:jupyterFileExplorer.selectJupyterConnection) or [Add a new connection](command:jupyterFileExplorer.addJupyterConnection)."
+      }
+    ],
     "configuration": {
       "title": "Jupyter File Explorer",
       "properties": {

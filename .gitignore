@@ -7,3 +7,6 @@ node_modules/
 # compiled output
 out/
 jupyterhub-file-explorer-0.0.1.vsix
+
+# mac
+.DS_Store
