@@ -14,7 +14,9 @@
     "jupyter",
     "file explorer",
     "remote",
-    "server"
+    "server", 
+    "jupyterhub",
+    "jupyter server"
   ],
   "icon": "images/jupyter.png",
   "repository": {
