@@ -1,6 +1,6 @@
 {
   "name": "jupyterhub-file-explorer",
-  "displayName": "JupyterHub File Explorer",
+  "displayName": "Jupyter",
   "description": "Browse and edit files on a remote Jupyter Server.",
   "version": "0.0.1",
   "publisher": "SebastianDazaAranzaes",
@@ -27,6 +27,23 @@
   ],
   "main": "./out/extension.js",
   "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "jupyter-container",
+          "title": "Jupyter",
+          "icon": "images/jupyter.png"
+        }
+      ]
+    },
+    "views": {
+      "jupyter-container": [
+        {
+          "id": "jupyterFileExplorer",
+          "name": "Files"
+        }
+      ]
+    },
     "commands": [
       {
         "command": "jupyterFileExplorer.addJupyterConnection",
@@ -34,7 +51,8 @@
       },
       {
         "command": "jupyterFileExplorer.selectJupyterConnection",
-        "title": "JHE: Select Jupyter Connection"
+        "title": "JHE: Select Jupyter Connection",
+        "icon": "$(plug)"
       },
       {
         "command": "jupyterFileExplorer.removeJupyterConnection",
@@ -42,7 +60,8 @@
       },
       {
         "command": "jupyterFileExplorer.disconnectJupyter",
-        "title": "JHE: Disconnect from Jupyter Server"
+        "title": "JHE: Disconnect from Jupyter Server",
+        "icon": "$(sign-out)"
       },
       {
         "command": "jupyterFileExplorer.refreshJupyterExplorer",
@@ -73,14 +92,12 @@
         {
           "command": "jupyterFileExplorer.selectJupyterConnection",
           "when": "!jupyterFileExplorer.connected",
-          "group": "navigation",
-          "icon": "$(plug)"
+          "group": "navigation"
         },
         {
           "command": "jupyterFileExplorer.disconnectJupyter",
           "when": "jupyterFileExplorer.connected",
-          "group": "navigation",
-          "icon": "$(sign-out)"
+          "group": "navigation"
         },
         {
           "command": "jupyterFileExplorer.refreshJupyterExplorer",
@@ -121,15 +138,6 @@
           "command": "jupyterFileExplorer.deleteFile",
           "when": "view == jupyterFileExplorer",
           "group": "2_modification"
-        }
-      ]
-    },
-    "views": {
-      "explorer": [
-        {
-          "id": "jupyterFileExplorer",
-          "name": "Jupyter Files",
-          "icon": "images/jupyter.png"
         }
       ]
     },
@@ -185,11 +193,11 @@
     "form-data": "^4.0.0"
   },
   "devDependencies": {
+    "@types/vscode": "^1.60.0",
     "@types/node": "^14.14.37",
     "@typescript-eslint/eslint-plugin": "^4.14.1",
     "@typescript-eslint/parser": "^4.14.1",
     "eslint": "^7.19.0",
-    "typescript": "^4.3.5",
-    "vscode": "^1.1.34"
+    "typescript": "^4.3.5"
   }
 }

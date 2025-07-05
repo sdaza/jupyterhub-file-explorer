@@ -12,16 +12,17 @@ export function activate(context: vscode.ExtensionContext) {
     const fileExplorerProvider = new FileExplorerProvider();
     const jupyterContentProvider = new JupyterContentProvider(fileExplorerProvider);
 
-    vscode.window.createTreeView('jupyterFileExplorer', { treeDataProvider: fileExplorerProvider });
+    const treeView = vscode.window.createTreeView('jupyterFileExplorer', { treeDataProvider: fileExplorerProvider });
 
-    const connectToJupyter = async (url: string, token: string, remotePath: string) => {
+    const connectToJupyter = async (connection: Connection) => {
         try {
-            await fileExplorerProvider.setConnection(url, token, remotePath || '/');
+            await fileExplorerProvider.setConnection(connection.url, connection.token, connection.remotePath || '/');
             const axiosInstance = fileExplorerProvider.getAxiosInstance();
             if (axiosInstance) {
                 jupyterContentProvider.setAxiosInstance(axiosInstance);
                 vscode.commands.executeCommand('setContext', 'jupyterFileExplorer.connected', true);
-                vscode.window.showInformationMessage('Connected to Jupyter Server.');
+                vscode.window.showInformationMessage(`Connected to ${connection.name}.`);
+                treeView.title = connection.name;
             } else {
                 throw new Error('Failed to create Axios instance.');
             }
@@ -35,6 +36,7 @@ export function activate(context: vscode.ExtensionContext) {
         fileExplorerProvider.disconnect();
         vscode.commands.executeCommand('setContext', 'jupyterFileExplorer.connected', false);
         vscode.window.showInformationMessage('Disconnected from Jupyter Server.');
+        treeView.title = 'Files';
     };
 
     let connectDisposable = vscode.commands.registerCommand('jupyterFileExplorer.connectJupyter', async () => {
@@ -54,7 +56,7 @@ export function activate(context: vscode.ExtensionContext) {
         if (selected) {
             const connection = connections.find(c => c.name === selected);
             if (connection) {
-                await connectToJupyter(connection.url, connection.token, connection.remotePath);
+                await connectToJupyter(connection);
             }
         }
     });
@@ -97,7 +99,7 @@ export function activate(context: vscode.ExtensionContext) {
         if (selected) {
             const connection = connections.find(c => c.name === selected);
             if (connection) {
-                await connectToJupyter(connection.url, connection.token, connection.remotePath);
+                await connectToJupyter(connection);
             }
         }
     });
@@ -122,7 +124,7 @@ export function activate(context: vscode.ExtensionContext) {
         }
     });
 
-    let disconnectDisposable = vscode.commands.registerCommand('jupyterFileExplorer.disconnect', disconnectFromJupyter);
+    let disconnectDisposable = vscode.commands.registerCommand('jupyterFileExplorer.disconnectJupyter', disconnectFromJupyter);
 
     let refreshDisposable = vscode.commands.registerCommand('jupyterFileExplorer.refreshJupyterExplorer', () => {
         fileExplorerProvider.refresh();
