@@ -1,8 +1,8 @@
 {
   "name": "jupyterhub-file-explorer",
-  "displayName": "Jupyter",
+  "displayName": "JupyterHub File Explorer",
   "description": "Browse and edit files on a remote Jupyter Server.",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "publisher": "SebastianDazaAranzaes",
   "engines": {
     "vscode": "^1.60.0"
@@ -31,7 +31,7 @@
       "activitybar": [
         {
           "id": "jupyter-container",
-          "title": "Jupyter",
+          "title": "JupyterHub",
           "icon": "images/jupyter.png"
         }
       ]

@@ -20,7 +20,7 @@ JupyterHub File Explorer is a Visual Studio Code extension that allows you to br
 
 ### Connecting to a Server
 
-- When you first open the **Jupyter Files** view, you will see a welcome message with options to connect.
+- When you first open the **JupyterHub** view, you will see a welcome message with options to connect.
 - Click the **Connect** button (plug icon) in the view's title bar, or use the Command Palette (`Ctrl+Shift+P`).
 - You will be prompted to select from your saved connections or add a new one.
 
@@ -39,8 +39,8 @@ All connection commands can be accessed from the Command Palette (`Ctrl+Shift+P`
 - **View Title Bar**:
     - **Disconnect**: Disconnects from the current server.
     - **Refresh**: Reloads the file and folder list.
-    - **New File**: Creates a new file in the current directory.
-    - **New Folder**: Creates a new folder in the current directory.
+    - **New File**: Creates a new file in the root directory.
+    - **New Folder**: Creates a new folder in the root directory.
 - **Context Menus**: Right-click on a file or folder to access actions like `Rename` and `Delete`.
 
 ## Configuration
