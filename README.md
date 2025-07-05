@@ -41,7 +41,7 @@ All connection commands can be accessed from the Command Palette (`Ctrl+Shift+P`
     - **Refresh**: Reloads the file and folder list.
     - **New File**: Creates a new file in the root directory.
     - **New Folder**: Creates a new folder in the root directory.
-- **Context Menus**: Right-click on a file or folder to access actions like `Rename` and `Delete`.
+- **Context Menus**: Right-click on a file or folder to access actions like `New File`, `New Folder`, `Rename`, and `Delete`.
 
 ## Configuration
 

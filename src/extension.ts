@@ -130,11 +130,11 @@ export function activate(context: vscode.ExtensionContext) {
         fileExplorerProvider.refresh();
     });
 
-    let newFileDisposable = vscode.commands.registerCommand('jupyterFileExplorer.newFile', (item: FileItem) => {
+    let newFileDisposable = vscode.commands.registerCommand('jupyterFileExplorer.newFile', (item?: FileItem) => {
         fileExplorerProvider.newFile(item);
     });
 
-    let newFolderDisposable = vscode.commands.registerCommand('jupyterFileExplorer.newFolder', (item: FileItem) => {
+    let newFolderDisposable = vscode.commands.registerCommand('jupyterFileExplorer.newFolder', (item?: FileItem) => {
         fileExplorerProvider.newFolder(item);
     });
 

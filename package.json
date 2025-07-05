@@ -1,8 +1,8 @@
 {
   "name": "jupyterhub-file-explorer",
   "displayName": "JupyterHub File Explorer",
-  "description": "Browse and edit files on a remote Jupyter Server.",
-  "version": "0.0.2",
+  "description": "Browse and edit files on a remote JupyterHub Server.",
+  "version": "0.0.3",
   "publisher": "SebastianDazaAranzaes",
   "engines": {
     "vscode": "^1.60.0"
@@ -70,12 +70,12 @@
       },
       {
         "command": "jupyterFileExplorer.newFile",
-        "title": "New File",
+        "title": "New File in root directory",
         "icon": "$(new-file)"
       },
       {
         "command": "jupyterFileExplorer.newFolder",
-        "title": "New Folder",
+        "title": "New Folder in root directory",
         "icon": "$(new-folder)"
       },
       {
