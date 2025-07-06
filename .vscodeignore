@@ -1,7 +1,9 @@
-**/*.ts
-**/tsconfig.json
-*.vsix
-.vscode-test/**
 .vscode/**
+.vscode-test/**
+src/**
+out/**
+node_modules/**
+webpack.config.js
+tsconfig.json
+*.vsix
 .gitignore
-.src/**

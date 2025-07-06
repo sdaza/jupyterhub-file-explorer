@@ -2,7 +2,7 @@
   "name": "jupyterhub-file-explorer",
   "displayName": "JupyterHub File Explorer",
   "description": "Browse and edit files on a remote JupyterHub Server.",
-  "version": "0.0.8",
+  "version": "0.0.10",
   "publisher": "SebastianDazaAranzaes",
   "engines": {
     "vscode": "^1.63.0"
@@ -14,7 +14,7 @@
     "jupyter",
     "file explorer",
     "remote",
-    "server", 
+    "server",
     "jupyterhub",
     "jupyter server"
   ],
@@ -27,7 +27,7 @@
   "activationEvents": [
     "onView:jupyterFileExplorer"
   ],
-  "main": "./out/extension.js",
+  "main": "./dist/extension.js",
   "contributes": {
     "viewsContainers": {
       "activitybar": [
@@ -72,12 +72,22 @@
       },
       {
         "command": "jupyterFileExplorer.newFile",
-        "title": "New File in root directory",
+        "title": "New File",
         "icon": "$(new-file)"
       },
       {
         "command": "jupyterFileExplorer.newFolder",
-        "title": "New Folder in root directory",
+        "title": "New Folder",
+        "icon": "$(new-folder)"
+      },
+      {
+        "command": "jupyterFileExplorer.newFileInRoot",
+        "title": "New File in Root Directory",
+        "icon": "$(new-file)"
+      },
+      {
+        "command": "jupyterFileExplorer.newFolderInRoot",
+        "title": "New Folder in Root Directory",
         "icon": "$(new-folder)"
       },
       {
@@ -87,19 +97,36 @@
       {
         "command": "jupyterFileExplorer.deleteFile",
         "title": "Delete"
+      },
+      {
+        "command": "jupyterFileExplorer.uploadFile",
+        "title": "Upload File",
+        "icon": "$(cloud-upload)"
+      },
+      {
+        "command": "jupyterFileExplorer.downloadFile",
+        "title": "Download File",
+        "icon": "$(cloud-download)"
+      },
+      {
+        "command": "jupyterFileExplorer.uploadFolder",
+        "title": "Upload Folder",
+        "icon": "$(folder-opened)"
       }
     ],
     "menus": {
       "view/title": [
         {
           "command": "jupyterFileExplorer.selectJupyterConnection",
-          "when": "!jupyterFileExplorer.connected",
-          "group": "navigation"
+          "when": "view == jupyterFileExplorer && !jupyterFileExplorer.connected",
+          "group": "navigation",
+          "icon": "$(plug)"
         },
         {
           "command": "jupyterFileExplorer.disconnectJupyter",
-          "when": "jupyterFileExplorer.connected",
-          "group": "navigation"
+          "when": "view == jupyterFileExplorer && jupyterFileExplorer.connected",
+          "group": "navigation",
+          "icon": "$(sign-out)"
         },
         {
           "command": "jupyterFileExplorer.refreshJupyterExplorer",
@@ -108,16 +135,28 @@
           "icon": "$(sync)"
         },
         {
-          "command": "jupyterFileExplorer.newFile",
+          "command": "jupyterFileExplorer.newFileInRoot",
           "when": "view == jupyterFileExplorer && jupyterFileExplorer.connected",
           "group": "navigation@2",
           "icon": "$(new-file)"
         },
         {
-          "command": "jupyterFileExplorer.newFolder",
+          "command": "jupyterFileExplorer.newFolderInRoot",
           "when": "view == jupyterFileExplorer && jupyterFileExplorer.connected",
           "group": "navigation@3",
           "icon": "$(new-folder)"
+        },
+        {
+          "command": "jupyterFileExplorer.uploadFile",
+          "when": "view == jupyterFileExplorer && jupyterFileExplorer.connected",
+          "group": "navigation@4",
+          "icon": "$(cloud-upload)"
+        },
+        {
+          "command": "jupyterFileExplorer.uploadFolder",
+          "when": "view == jupyterFileExplorer && jupyterFileExplorer.connected",
+          "group": "navigation@5",
+          "icon": "$(folder-opened)"
         }
       ],
       "view/item/context": [
@@ -132,14 +171,29 @@
           "group": "1_new@2"
         },
         {
+          "command": "jupyterFileExplorer.uploadFile",
+          "when": "view == jupyterFileExplorer && viewItem == directory",
+          "group": "1_new@3"
+        },
+        {
+          "command": "jupyterFileExplorer.uploadFolder",
+          "when": "view == jupyterFileExplorer && viewItem == directory",
+          "group": "1_new@4"
+        },
+        {
+          "command": "jupyterFileExplorer.downloadFile",
+          "when": "view == jupyterFileExplorer && viewItem == file",
+          "group": "2_modification@1"
+        },
+        {
           "command": "jupyterFileExplorer.renameFile",
           "when": "view == jupyterFileExplorer",
-          "group": "2_modification"
+          "group": "2_modification@2"
         },
         {
           "command": "jupyterFileExplorer.deleteFile",
           "when": "view == jupyterFileExplorer",
-          "group": "2_modification"
+          "group": "2_modification@3"
         }
       ]
     },
@@ -178,28 +232,55 @@
               }
             }
           }
+        },
+        "jupyterFileExplorer.autoReconnect": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically attempt to reconnect when connection is lost"
+        },
+        "jupyterFileExplorer.reconnectInterval": {
+          "type": "number",
+          "default": 5000,
+          "description": "Time in milliseconds between reconnection attempts (default: 5000ms)"
+        },
+        "jupyterFileExplorer.maxReconnectAttempts": {
+          "type": "number",
+          "default": 3,
+          "description": "Maximum number of reconnection attempts before giving up (default: 3)"
+        },
+        "jupyterFileExplorer.rememberLastDirectory": {
+          "type": "boolean",
+          "default": true,
+          "description": "Remember the last opened directory for each connection"
+        },
+        "jupyterFileExplorer.lastDirectories": {
+          "type": "object",
+          "default": {},
+          "description": "Internal storage for last opened directories per connection (managed automatically)"
         }
       }
     }
   },
   "scripts": {
-    "vscode:prepublish": "npm run compile",
-    "compile": "tsc -p ./",
-    "watch": "tsc -watch -p ./",
-    "pretest": "npm run compile && npm run lint",
-    "lint": "eslint src --ext ts",
-    "test": "node ./out/test/runTest.js"
+    "vscode:prepublish": "npm run package",
+    "compile": "webpack",
+    "watch": "webpack --watch",
+    "package": "webpack --mode production --devtool hidden-source-map",
+    "lint": "eslint src --ext ts"
   },
   "dependencies": {
     "axios": "^1.4.0",
     "form-data": "^4.0.0"
   },
   "devDependencies": {
-    "@types/vscode": "^1.60.0",
     "@types/node": "^14.14.37",
+    "@types/vscode": "^1.60.0",
     "@typescript-eslint/eslint-plugin": "^4.14.1",
     "@typescript-eslint/parser": "^4.14.1",
     "eslint": "^7.19.0",
-    "typescript": "^4.3.5"
+    "ts-loader": "^9.5.2",
+    "typescript": "^4.3.5",
+    "webpack": "^5.99.9",
+    "webpack-cli": "^6.0.1"
   }
 }

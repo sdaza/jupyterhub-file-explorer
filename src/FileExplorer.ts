@@ -1,9 +1,18 @@
 import * as vscode from 'vscode';
 import axios, { AxiosInstance } from 'axios';
+import * as fs from 'fs';
+import * as path from 'path';
 
-export class FileExplorerProvider implements vscode.TreeDataProvider<FileItem>, vscode.FileSystemProvider {
+export class FileExplorerProvider implements vscode.TreeDataProvider<FileItem>, vscode.FileSystemProvider, vscode.TreeDragAndDropController<FileItem> {
     private _onDidChangeTreeData: vscode.EventEmitter<FileItem | undefined | null> = new vscode.EventEmitter<FileItem | undefined | null>();
     readonly onDidChangeTreeData: vscode.Event<FileItem | undefined | null> = this._onDidChangeTreeData.event;
+
+    // Drag and drop support
+    readonly dropMimeTypes = [
+        'text/uri-list',
+        'application/vnd.code.tree.jupyterFileExplorer'
+    ];
+    readonly dragMimeTypes = ['application/vnd.code.tree.jupyterFileExplorer'];
 
     private jupyterServerUrl: string = '';
     private jupyterToken: string = '';
@@ -18,7 +27,7 @@ export class FileExplorerProvider implements vscode.TreeDataProvider<FileItem>, 
         // Initialize with default values or prompt the user
     }
 
-    async setConnection(url: string, token: string, remotePath: string) {
+    async setConnection(url: string, token: string, remotePath: string, connectionName?: string) {
         let serverUrl = url.endsWith('/') ? url : url + '/';
         
         // Clean up remote path
@@ -322,6 +331,159 @@ export class FileExplorerProvider implements vscode.TreeDataProvider<FileItem>, 
         const parts = path.split('/');
         parts.pop();
         return parts.join('/') || '/';
+    }
+
+    // Missing methods needed by extension commands
+    async newFileInRoot(): Promise<void> {
+        await this.newFile();
+    }
+
+    async newFolderInRoot(): Promise<void> {
+        await this.newFolder();
+    }
+
+    async uploadFile(targetDirectory?: FileItem): Promise<void> {
+        vscode.window.showInformationMessage('Upload file functionality not implemented in base version.');
+    }
+
+    async uploadFolder(targetDirectory?: FileItem): Promise<void> {
+        vscode.window.showInformationMessage('Upload folder functionality not implemented in base version.');
+    }
+
+    async downloadFile(item: FileItem): Promise<void> {
+        vscode.window.showInformationMessage('Download file functionality not implemented in base version.');
+    }
+
+    // Drag and drop support methods
+    async handleDrag(source: readonly FileItem[], dataTransfer: vscode.DataTransfer, token: vscode.CancellationToken): Promise<void> {
+        console.log('handleDrag called with', source.length, 'items');
+        dataTransfer.set('application/vnd.code.tree.jupyterFileExplorer', new vscode.DataTransferItem(source));
+    }
+
+    async handleDrop(target: FileItem | undefined, dataTransfer: vscode.DataTransfer, token: vscode.CancellationToken): Promise<void> {
+        console.log('handleDrop called with target:', target?.label);
+        
+        // Check for internal tree item moves
+        const internalTransfer = dataTransfer.get('application/vnd.code.tree.jupyterFileExplorer');
+        if (internalTransfer) {
+            await this.handleInternalMove(internalTransfer, target);
+            return;
+        }
+        
+        vscode.window.showInformationMessage('External file upload via drag & drop is not implemented in this base version.');
+    }
+
+    private async handleInternalMove(transferItem: vscode.DataTransferItem, target: FileItem | undefined): Promise<void> {
+        try {
+            console.log('handleInternalMove called');
+            
+            const sourceItems = transferItem.value as FileItem[];
+            if (!sourceItems || sourceItems.length === 0) {
+                console.log('No source items found');
+                return;
+            }
+
+            // Determine target directory
+            let targetPath: string;
+            if (target) {
+                targetPath = target.collapsible ? target.uri : this.extractParentPath(target.uri);
+            } else {
+                targetPath = this.remotePath;
+            }
+
+            console.log(`Moving ${sourceItems.length} items to: ${targetPath}`);
+
+            let successCount = 0;
+            let errorCount = 0;
+
+            for (const sourceItem of sourceItems) {
+                try {
+                    const sourceParent = this.extractParentPath(sourceItem.uri);
+                    
+                    if (sourceParent === targetPath) {
+                        console.log(`Skipping ${sourceItem.label} - already in target directory`);
+                        continue;
+                    }
+
+                    if (sourceItem.collapsible && targetPath.startsWith(sourceItem.uri)) {
+                        vscode.window.showErrorMessage(`Cannot move directory "${sourceItem.label}" into itself.`);
+                        errorCount++;
+                        continue;
+                    }
+
+                    const newPath = `${targetPath}/${sourceItem.label}`.replace('//', '/');
+                    console.log(`Moving ${sourceItem.uri} to ${newPath}`);
+                    
+                    await this.moveItem(sourceItem.uri, newPath);
+                    successCount++;
+                    
+                } catch (error) {
+                    console.error(`Failed to move ${sourceItem.label}:`, error);
+                    vscode.window.showErrorMessage(`Failed to move ${sourceItem.label}: ${error}`);
+                    errorCount++;
+                }
+            }
+
+            this.refresh();
+
+            if (successCount > 0) {
+                vscode.window.showInformationMessage(`Successfully moved ${successCount} item(s).`);
+            }
+            if (errorCount > 0) {
+                vscode.window.showWarningMessage(`Failed to move ${errorCount} item(s). Check the output for details.`);
+            }
+
+        } catch (error) {
+            console.error('Failed to handle internal move:', error);
+            vscode.window.showErrorMessage(`Failed to move items: ${error}`);
+        }
+    }
+
+    private async moveItem(sourcePath: string, targetPath: string): Promise<void> {
+        if (!this.axiosInstance) {
+            throw new Error('Not connected to Jupyter Server');
+        }
+
+        try {
+            console.log(`Attempting to move: ${sourcePath} -> ${targetPath}`);
+            
+            // Jupyter Server API expects paths without leading slashes for the API endpoint
+            // but the source path in the URL should match exactly how it's stored
+            const sourcePathClean = sourcePath.startsWith('/') ? sourcePath.substring(1) : sourcePath;
+            const targetPathClean = targetPath.startsWith('/') ? targetPath.substring(1) : targetPath;
+            
+            const apiUrl = `api/contents/${sourcePathClean}`;
+            
+            console.log(`API URL: ${this.jupyterServerUrl}${apiUrl}`);
+            console.log(`Request body path: ${targetPathClean}`);
+            
+            const response = await this.axiosInstance.patch(apiUrl, {
+                path: targetPathClean
+            });
+
+            console.log(`Successfully moved ${sourcePath} to ${targetPath}`, response.status);
+            
+        } catch (error: any) {
+            console.error('Move operation failed:', error);
+            
+            if (error.response) {
+                console.error('Response status:', error.response.status);
+                console.error('Response data:', error.response.data);
+                console.error('Request URL:', error.config?.url);
+                console.error('Request data:', error.config?.data);
+                
+                // More specific error handling
+                if (error.response.status === 404) {
+                    throw new Error(`File not found: The source file "${sourcePath}" does not exist on the server.`);
+                } else if (error.response.status === 409) {
+                    throw new Error(`Conflict: A file already exists at "${targetPath}".`);
+                } else {
+                    throw new Error(`Move failed: ${error.response.status} - ${error.response.data?.message || 'Unknown server error'}`);
+                }
+            } else {
+                throw new Error(`Move failed: ${error.message}`);
+            }
+        }
     }
 }
 

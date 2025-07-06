@@ -12,11 +12,14 @@ export function activate(context: vscode.ExtensionContext) {
     const fileExplorerProvider = new FileExplorerProvider();
     const jupyterContentProvider = new JupyterContentProvider(fileExplorerProvider);
 
-    const treeView = vscode.window.createTreeView('jupyterFileExplorer', { treeDataProvider: fileExplorerProvider });
+    const treeView = vscode.window.createTreeView('jupyterFileExplorer', { 
+        treeDataProvider: fileExplorerProvider,
+        dragAndDropController: fileExplorerProvider
+    });
 
     const connectToJupyter = async (connection: Connection) => {
         try {
-            await fileExplorerProvider.setConnection(connection.url, connection.token, connection.remotePath || '/');
+            await fileExplorerProvider.setConnection(connection.url, connection.token, connection.remotePath || '/', connection.name);
             const axiosInstance = fileExplorerProvider.getAxiosInstance();
             if (axiosInstance) {
                 jupyterContentProvider.setAxiosInstance(axiosInstance);
@@ -138,6 +141,26 @@ export function activate(context: vscode.ExtensionContext) {
         fileExplorerProvider.newFolder(item);
     });
 
+    let newFileInRootDisposable = vscode.commands.registerCommand('jupyterFileExplorer.newFileInRoot', () => {
+        fileExplorerProvider.newFileInRoot();
+    });
+
+    let newFolderInRootDisposable = vscode.commands.registerCommand('jupyterFileExplorer.newFolderInRoot', () => {
+        fileExplorerProvider.newFolderInRoot();
+    });
+
+    let uploadFileDisposable = vscode.commands.registerCommand('jupyterFileExplorer.uploadFile', (item?: FileItem) => {
+        fileExplorerProvider.uploadFile(item);
+    });
+
+    let uploadFolderDisposable = vscode.commands.registerCommand('jupyterFileExplorer.uploadFolder', (item?: FileItem) => {
+        fileExplorerProvider.uploadFolder(item);
+    });
+
+    let downloadFileDisposable = vscode.commands.registerCommand('jupyterFileExplorer.downloadFile', (item: FileItem) => {
+        fileExplorerProvider.downloadFile(item);
+    });
+
     let renameFileDisposable = vscode.commands.registerCommand('jupyterFileExplorer.renameFile', (item: FileItem) => {
         fileExplorerProvider.renameFile(item);
     });
@@ -164,6 +187,11 @@ export function activate(context: vscode.ExtensionContext) {
         refreshDisposable,
         newFileDisposable,
         newFolderDisposable,
+        newFileInRootDisposable,
+        newFolderInRootDisposable,
+        uploadFileDisposable,
+        uploadFolderDisposable,
+        downloadFileDisposable,
         renameFileDisposable,
         deleteFileDisposable,
         openFileDisposable
