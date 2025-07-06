@@ -169,6 +169,10 @@ export function activate(context: vscode.ExtensionContext) {
         fileExplorerProvider.deleteFile(item);
     });
 
+    let forceDeleteFileDisposable = vscode.commands.registerCommand('jupyterFileExplorer.forceDeleteFile', (item: FileItem) => {
+        fileExplorerProvider.forceDeleteFile(item);
+    });
+
     let openFileDisposable = vscode.commands.registerCommand('jupyterFileExplorer.openFile', (filePath: string) => {
         fileExplorerProvider.openFile(filePath);
     });
@@ -194,6 +198,7 @@ export function activate(context: vscode.ExtensionContext) {
         downloadFileDisposable,
         renameFileDisposable,
         deleteFileDisposable,
+        forceDeleteFileDisposable,
         openFileDisposable
     );
     context.subscriptions.push(vscode.workspace.registerTextDocumentContentProvider('jupyter-remote', jupyterContentProvider));

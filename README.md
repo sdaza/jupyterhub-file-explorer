@@ -117,13 +117,13 @@ The configuration is stored under the `jupyterFileExplorer.connections` property
         "name": "My Dev Server",
         "url": "http://localhost:8888/",
         "token": "your-secret-token",
-        "remotePath": "projects/"
+        "remotePath": "user/username/projects"
     },
     {
         "name": "JupyterHub Production",
         "url": "https://my-jupyterhub.com/",
         "token": "another-token",
-        "remotePath": "user/my-username/lab"
+        "remotePath": "user/username/lab"
     }
 ]
 ```
@@ -134,6 +134,26 @@ The configuration is stored under the `jupyterFileExplorer.connections` property
 - **url**: The base URL of your Jupyter Server or JupyterHub instance
 - **token**: Your Jupyter authentication token
 - **remotePath**: The remote directory path to browse (can be empty for root, or specify a subdirectory)
+
+### Important: JupyterHub Path Requirements
+
+**For JupyterHub connections, you must specify the username in the remote path, otherwise the connection will not work.**
+
+Example for JupyterHub:
+```json
+{
+  "name": "JupyterHub Dev",
+  "url": "https://jupyterhub-dev.myserver.io",
+  "token": "your-token-here",
+  "remotePath": "/user/your-username/"
+}
+```
+
+**Key Points:**
+- Always include `/user/your-username/` in the remote path for JupyterHub
+- Use your full username (including domain if applicable)
+- The path should start and end with forward slashes
+- This applies even when connecting to the "generic server" endpoint (e.g., My Server)
 
 ### Advanced Configuration Options
 

@@ -330,16 +330,8 @@ export class FileExplorerProvider implements vscode.TreeDataProvider<FileItem>, 
                     // Recursively delete subdirectories
                     await this.deleteDirectoryRecursive(itemPath);
                 } else {
-                    // Delete files
-                    const fileDeleteUrl = `api/contents/${itemPath}`;
-                    console.log(`DELETE file request to: ${fileDeleteUrl}`);
-                    try {
-                        await this.axiosInstance.delete(fileDeleteUrl);
-                        console.log(`Successfully deleted file: ${itemPath}`);
-                    } catch (fileError: any) {
-                        console.error(`Failed to delete file ${itemPath}:`, fileError.response?.data || fileError.message);
-                        throw fileError;
-                    }
+                    // Delete files with retry for potentially locked files
+                    await this.deleteFileWithRetry(itemPath);
                 }
             }
 
@@ -390,6 +382,136 @@ export class FileExplorerProvider implements vscode.TreeDataProvider<FileItem>, 
         } catch (error: any) {
             console.error(`Failed to delete directory ${dirPath}:`, error.response?.data || error.message);
             throw error;
+        }
+    }
+
+    private async deleteFileWithRetry(itemPath: string, maxRetries: number = 3, delay: number = 1000): Promise<void> {
+        if (!this.axiosInstance) {
+            throw new Error('Not connected to Jupyter Server');
+        }
+
+        const fileDeleteUrl = `api/contents/${itemPath}`;
+        console.log(`DELETE file request to: ${fileDeleteUrl}`);
+        
+        for (let attempt = 1; attempt <= maxRetries; attempt++) {
+            try {
+                await this.axiosInstance.delete(fileDeleteUrl);
+                console.log(`Successfully deleted file: ${itemPath} (attempt ${attempt})`);
+                return;
+            } catch (fileError: any) {
+                console.error(`Failed to delete file ${itemPath} (attempt ${attempt}):`, fileError.response?.data || fileError.message);
+                
+                if (attempt === maxRetries) {
+                    // On final attempt, provide more informative error message
+                    const extension = itemPath.split('.').pop()?.toLowerCase();
+                    console.warn(`Failed to delete file ${itemPath} after ${maxRetries} attempts. Extension: ${extension}`);
+                    throw new Error(`Failed to delete file ${itemPath} after ${maxRetries} attempts. The file may be locked, in use, or protected by the server.`);
+                }
+                
+                // Wait before retrying
+                await new Promise(resolve => setTimeout(resolve, delay));
+            }
+        }
+    }
+
+    private async forceDelete(uri: vscode.Uri): Promise<void> {
+        if (!this.isConnected || !this.axiosInstance) {
+            throw vscode.FileSystemError.NoPermissions('Not connected to Jupyter Server.');
+        }
+
+        const itemPath = uri.path.startsWith('/') ? uri.path.substring(1) : uri.path;
+        
+        try {
+            console.log(`Starting force deletion of: ${itemPath}`);
+            
+            // Strategy 1: Try normal deletion first
+            try {
+                await this.delete(uri, { recursive: true });
+                vscode.window.showInformationMessage(`Successfully force deleted ${itemPath}`);
+                return;
+            } catch (error) {
+                console.log(`Normal deletion failed, trying force strategies...`);
+            }
+
+            // Strategy 2: Try to list and delete all files individually with extended retry
+            await this.forceDeleteRecursive(itemPath);
+            
+            vscode.window.showInformationMessage(`Successfully force deleted ${itemPath} using aggressive deletion`);
+            
+            const parentUri = vscode.Uri.parse(`jupyter-remote:${this.extractParentPath(uri.path)}`);
+            this._emitter.fire([{ type: vscode.FileChangeType.Deleted, uri }]);
+            this._emitter.fire([{ type: vscode.FileChangeType.Changed, uri: parentUri }]);
+
+        } catch (error: any) {
+            console.error('Force delete failed:', error);
+            const errorMessage = `Force delete failed for ${itemPath}: ${error.message}. Some files may be permanently locked or protected by the server.`;
+            vscode.window.showErrorMessage(errorMessage);
+            throw vscode.FileSystemError.Unavailable(errorMessage);
+        }
+    }
+
+    private async forceDeleteRecursive(dirPath: string, maxAttempts: number = 5): Promise<void> {
+        if (!this.axiosInstance) {
+            throw new Error('Not connected to Jupyter Server');
+        }
+
+        console.log(`Force deleting directory: ${dirPath}`);
+        
+        for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+            try {
+                // Get directory contents
+                const listUrl = `api/contents/${dirPath}`;
+                const response = await this.axiosInstance.get(listUrl);
+                const contents = response.data.content || [];
+
+                console.log(`Attempt ${attempt}: Directory ${dirPath} contains ${contents.length} items`);
+
+                if (contents.length === 0) {
+                    // Directory is empty, try to delete it
+                    await this.axiosInstance.delete(`api/contents/${dirPath}`);
+                    console.log(`Successfully deleted empty directory: ${dirPath}`);
+                    return;
+                }
+
+                // Delete all items with extended retry and ignore individual failures
+                const deletePromises = contents.map(async (item: any) => {
+                    try {
+                        if (item.type === 'directory') {
+                            await this.forceDeleteRecursive(item.path, 3); // Fewer attempts for subdirectories
+                        } else {
+                            await this.deleteFileWithRetry(item.path, 5, 500); // More attempts, shorter delay
+                        }
+                    } catch (error) {
+                        console.warn(`Failed to delete ${item.path}, continuing...`);
+                        // Continue with other files even if some fail
+                    }
+                });
+
+                // Wait for all deletion attempts to complete (using Promise.all with error handling)
+                await Promise.all(deletePromises.map((p: Promise<void>) => p.catch(() => {})));
+
+                // Wait a bit for server to process
+                await new Promise(resolve => setTimeout(resolve, 1000 * attempt));
+
+                // Try to delete the directory again
+                try {
+                    await this.axiosInstance.delete(`api/contents/${dirPath}`);
+                    console.log(`Successfully deleted directory: ${dirPath} on attempt ${attempt}`);
+                    return;
+                } catch (dirError) {
+                    console.log(`Directory deletion failed on attempt ${attempt}, checking remaining contents...`);
+                }
+
+            } catch (error: any) {
+                console.error(`Force delete attempt ${attempt} failed:`, error.message);
+                
+                if (attempt === maxAttempts) {
+                    throw new Error(`Failed to force delete ${dirPath} after ${maxAttempts} attempts. Directory may contain locked files or have server-side protection.`);
+                }
+                
+                // Wait longer between attempts
+                await new Promise(resolve => setTimeout(resolve, 2000 * attempt));
+            }
         }
     }
 
@@ -454,10 +576,34 @@ export class FileExplorerProvider implements vscode.TreeDataProvider<FileItem>, 
     }
 
     async deleteFile(item: FileItem): Promise<void> {
-        const result = await vscode.window.showWarningMessage(`Are you sure you want to delete ${item.label}?`, { modal: true }, 'Delete');
+        const result = await vscode.window.showWarningMessage(
+            `Are you sure you want to delete ${item.label}?`, 
+            { modal: true }, 
+            'Delete', 
+            'Force Delete'
+        );
+        
         if (result === 'Delete') {
             const uri = vscode.Uri.parse(`jupyter-remote:${item.uri}`);
             await this.delete(uri, { recursive: true });
+            this.refresh();
+        } else if (result === 'Force Delete') {
+            const uri = vscode.Uri.parse(`jupyter-remote:${item.uri}`);
+            await this.forceDelete(uri);
+            this.refresh();
+        }
+    }
+
+    async forceDeleteFile(item: FileItem): Promise<void> {
+        const result = await vscode.window.showWarningMessage(
+            `Force delete will attempt aggressive deletion of ${item.label}. This may take longer and cannot be undone. Continue?`, 
+            { modal: true }, 
+            'Force Delete'
+        );
+        
+        if (result === 'Force Delete') {
+            const uri = vscode.Uri.parse(`jupyter-remote:${item.uri}`);
+            await this.forceDelete(uri);
             this.refresh();
         }
     }

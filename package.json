@@ -99,6 +99,10 @@
         "title": "Delete"
       },
       {
+        "command": "jupyterFileExplorer.forceDeleteFile",
+        "title": "Force Delete"
+      },
+      {
         "command": "jupyterFileExplorer.uploadFile",
         "title": "Upload File",
         "icon": "$(cloud-upload)"
@@ -194,6 +198,11 @@
           "command": "jupyterFileExplorer.deleteFile",
           "when": "view == jupyterFileExplorer",
           "group": "2_modification@3"
+        },
+        {
+          "command": "jupyterFileExplorer.forceDeleteFile",
+          "when": "view == jupyterFileExplorer",
+          "group": "2_modification@4"
         }
       ]
     },
