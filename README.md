@@ -7,6 +7,8 @@ JupyterHub File Explorer is a Visual Studio Code extension that allows you to br
 - **Intuitive Connection Management**: A clear connect/disconnect flow with a welcome screen to guide you.
 - **Save Multiple Connections**: Save and quickly switch between multiple Jupyter Server configurations.
 - **Full File Operations**: Create, read, update, delete, and rename files and folders on the remote server.
+  - **Enhanced Folder Deletion**: Automatically handles recursive deletion of folders containing files and subdirectories
+  - **Smart Cleanup**: Detects and handles "directory not empty" errors with detailed logging for troubleshooting
 - **Context-Aware File Creation**: Create files and folders either in the current directory (via context menu) or in the root directory (via toolbar).
 - **Drag & Drop File Management**: 
   - Upload files from your OS by dragging them into the explorer
@@ -159,6 +161,11 @@ Example settings configuration:
 - **Connection Failed**: Verify your server URL, token, and that the Jupyter Server is running
 - **Files Not Loading**: Check your remote path and ensure you have proper permissions
 - **Can't Create Files**: Ensure you have write permissions in the target directory
+- **Can't Delete Non-Empty Folders**: The extension now supports recursive deletion of folders with files. If deletion fails:
+  - Check the VS Code Developer Console for detailed error logs
+  - Ensure you have proper permissions to delete all files in the folder
+  - Some Jupyter servers may have restrictions on deleting certain system files or hidden files
+  - Try deleting individual files first if the folder contains many items
 - **Auto-reconnect Not Working**: Check that `jupyterFileExplorer.autoReconnect` is enabled in your settings
 - **Directory Not Remembered**: Ensure `jupyterFileExplorer.rememberLastDirectory` is enabled in your settings
 - **Drag & Drop Not Working**: 

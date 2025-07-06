@@ -2,7 +2,7 @@
   "name": "jupyterhub-file-explorer",
   "displayName": "JupyterHub File Explorer",
   "description": "Browse and edit files on a remote JupyterHub Server.",
-  "version": "0.0.10",
+  "version": "0.0.11",
   "publisher": "SebastianDazaAranzaes",
   "engines": {
     "vscode": "^1.63.0"

@@ -236,25 +236,160 @@ export class FileExplorerProvider implements vscode.TreeDataProvider<FileItem>, 
         const parentUri = vscode.Uri.parse(`jupyter-remote:${this.extractParentPath(uri.path)}`);
         this._emitter.fire([{ type: options.create ? vscode.FileChangeType.Created : vscode.FileChangeType.Changed, uri }]);
         this._emitter.fire([{ type: vscode.FileChangeType.Changed, uri: parentUri }]);
-    }
-
-    async delete(uri: vscode.Uri, options: { recursive: boolean; }): Promise<void> {
+    }    async delete(uri: vscode.Uri, options: { recursive: boolean; }): Promise<void> {
         if (!this.isConnected || !this.axiosInstance) {
             throw vscode.FileSystemError.NoPermissions('Not connected to Jupyter Server.');
         }
     
         const itemPath = uri.path.startsWith('/') ? uri.path.substring(1) : uri.path;
         
-        const apiUrl = `api/contents/${itemPath}`;
         try {
-            await this.axiosInstance.delete(apiUrl);
+            // First, check if this is a directory and if it has contents
+            const stat = await this.stat(uri);
+            
+            if (stat.type === vscode.FileType.Directory && options.recursive) {
+                // For directories, we need to handle recursive deletion
+                console.log(`Attempting recursive deletion of directory: ${itemPath}`);
+                await this.deleteDirectoryRecursive(itemPath);
+            } else {
+                // For files or non-recursive deletion, use simple delete
+                console.log(`Attempting simple deletion of: ${itemPath}`);
+                const apiUrl = `api/contents/${itemPath}`;
+                const response = await this.axiosInstance.delete(apiUrl);
+                console.log(`Delete response:`, response.status, response.statusText);
+            }
+            
             const parentUri = vscode.Uri.parse(`jupyter-remote:${this.extractParentPath(uri.path)}`);
             this._emitter.fire([{ type: vscode.FileChangeType.Deleted, uri }]);
             this._emitter.fire([{ type: vscode.FileChangeType.Changed, uri: parentUri }]);
-    
-        } catch (error) {
-            vscode.window.showErrorMessage(`Failed to delete: ${error}`);
-            throw vscode.FileSystemError.Unavailable(`Failed to delete: ${error}`);
+
+        } catch (error: any) {
+            console.error('Delete operation failed:', {
+                path: itemPath,
+                error: error.message,
+                status: error.response?.status,
+                statusText: error.response?.statusText,
+                data: error.response?.data
+            });
+            
+            let errorMessage = `Failed to delete ${itemPath}`;
+            if (error.response?.data?.message) {
+                const serverMessage = error.response.data.message;
+                if (serverMessage.includes('not empty')) {
+                    errorMessage += ': Directory contains files that could not be deleted. This might be due to hidden files, permission issues, or server-side restrictions.';
+                } else {
+                    errorMessage += `: ${serverMessage}`;
+                }
+            } else if (error.response?.status === 400) {
+                errorMessage += ': Bad Request - The server cannot delete this item. It may contain files or be protected.';
+            } else if (error.response?.status === 404) {
+                errorMessage += ': Item not found';
+            } else if (error.response?.status === 403) {
+                errorMessage += ': Permission denied';
+            } else {
+                errorMessage += `: ${error.message}`;
+            }
+            
+            vscode.window.showErrorMessage(errorMessage);
+            throw vscode.FileSystemError.Unavailable(errorMessage);
+        }
+    }
+
+    private async deleteDirectoryRecursive(dirPath: string): Promise<void> {
+        if (!this.axiosInstance) {
+            throw new Error('Not connected to Jupyter Server');
+        }
+
+        try {
+            console.log(`Starting recursive deletion of directory: ${dirPath}`);
+            
+            // Always try recursive approach first for directories with contents
+            // Get directory contents first
+            const listUrl = `api/contents/${dirPath}`;
+            console.log(`Fetching directory contents from: ${listUrl}`);
+            const response = await this.axiosInstance.get(listUrl);
+            const contents = response.data.content || [];
+
+            console.log(`Directory ${dirPath} contains ${contents.length} items:`, contents.map((item: any) => `${item.name} (${item.type})`));
+
+            // If directory is empty, try simple deletion
+            if (contents.length === 0) {
+                console.log(`Directory ${dirPath} is empty, using simple delete`);
+                const deleteUrl = `api/contents/${dirPath}`;
+                await this.axiosInstance.delete(deleteUrl);
+                console.log(`Successfully deleted empty directory: ${dirPath}`);
+                return;
+            }
+
+            // Delete all contents first (deepest first for proper cleanup)
+            for (const item of contents) {
+                const itemPath = item.path;
+                console.log(`Deleting item: ${itemPath} (type: ${item.type})`);
+                
+                if (item.type === 'directory') {
+                    // Recursively delete subdirectories
+                    await this.deleteDirectoryRecursive(itemPath);
+                } else {
+                    // Delete files
+                    const fileDeleteUrl = `api/contents/${itemPath}`;
+                    console.log(`DELETE file request to: ${fileDeleteUrl}`);
+                    try {
+                        await this.axiosInstance.delete(fileDeleteUrl);
+                        console.log(`Successfully deleted file: ${itemPath}`);
+                    } catch (fileError: any) {
+                        console.error(`Failed to delete file ${itemPath}:`, fileError.response?.data || fileError.message);
+                        throw fileError;
+                    }
+                }
+            }
+
+            // Now delete the empty directory
+            console.log(`All contents deleted, now deleting empty directory: ${dirPath}`);
+            const deleteUrl = `api/contents/${dirPath}`;
+            console.log(`DELETE directory request to: ${deleteUrl}`);
+            
+            try {
+                await this.axiosInstance.delete(deleteUrl);
+                console.log(`Successfully deleted directory: ${dirPath}`);
+            } catch (dirError: any) {
+                console.error(`Failed to delete directory ${dirPath}:`, dirError.response?.data || dirError.message);
+                // If it still says "not empty", let's check what's left
+                if (dirError.response?.data?.message?.includes('not empty')) {
+                    console.log(`Directory still reported as not empty, checking contents again...`);
+                    try {
+                        const checkResponse = await this.axiosInstance.get(listUrl);
+                        const remainingContents = checkResponse.data.content || [];
+                        console.log(`Remaining contents in ${dirPath}:`, remainingContents.map((item: any) => `${item.name} (${item.type})`));
+                        
+                        // Try to delete remaining items
+                        for (const item of remainingContents) {
+                            console.log(`Retrying deletion of: ${item.path}`);
+                            try {
+                                if (item.type === 'directory') {
+                                    await this.deleteDirectoryRecursive(item.path);
+                                } else {
+                                    await this.axiosInstance.delete(`api/contents/${item.path}`);
+                                }
+                            } catch (retryError) {
+                                console.error(`Failed to delete remaining item ${item.path}:`, retryError);
+                            }
+                        }
+                        
+                        // Try directory deletion one more time
+                        await this.axiosInstance.delete(deleteUrl);
+                        console.log(`Successfully deleted directory: ${dirPath} (after cleanup)`);
+                    } catch (finalError) {
+                        console.error(`Final deletion attempt failed for ${dirPath}:`, finalError);
+                        throw dirError;
+                    }
+                } else {
+                    throw dirError;
+                }
+            }
+
+        } catch (error: any) {
+            console.error(`Failed to delete directory ${dirPath}:`, error.response?.data || error.message);
+            throw error;
         }
     }
 
@@ -343,15 +478,138 @@ export class FileExplorerProvider implements vscode.TreeDataProvider<FileItem>, 
     }
 
     async uploadFile(targetDirectory?: FileItem): Promise<void> {
-        vscode.window.showInformationMessage('Upload file functionality not implemented in base version.');
+        if (!this.isConnected || !this.axiosInstance) {
+            vscode.window.showErrorMessage('Not connected to Jupyter Server.');
+            return;
+        }
+
+        const parentPath = targetDirectory ? targetDirectory.uri : this.remotePath;
+        
+        const fileUris = await vscode.window.showOpenDialog({
+            canSelectFiles: true,
+            canSelectFolders: false,
+            canSelectMany: true,
+            openLabel: 'Upload'
+        });
+
+        if (!fileUris || fileUris.length === 0) {
+            return;
+        }
+
+        let successCount = 0;
+        let errorCount = 0;
+
+        for (const fileUri of fileUris) {
+            try {
+                await this.uploadSingleFile(fileUri.fsPath, parentPath);
+                successCount++;
+            } catch (error) {
+                console.error(`Failed to upload ${path.basename(fileUri.fsPath)}:`, error);
+                vscode.window.showErrorMessage(`Failed to upload ${path.basename(fileUri.fsPath)}: ${error}`);
+                errorCount++;
+            }
+        }
+
+        this.refresh();
+
+        if (successCount > 0) {
+            vscode.window.showInformationMessage(`Successfully uploaded ${successCount} file(s).`);
+        }
+        if (errorCount > 0) {
+            vscode.window.showWarningMessage(`Failed to upload ${errorCount} file(s).`);
+        }
     }
 
     async uploadFolder(targetDirectory?: FileItem): Promise<void> {
-        vscode.window.showInformationMessage('Upload folder functionality not implemented in base version.');
+        if (!this.isConnected || !this.axiosInstance) {
+            vscode.window.showErrorMessage('Not connected to Jupyter Server.');
+            return;
+        }
+
+        const parentPath = targetDirectory ? targetDirectory.uri : this.remotePath;
+        
+        const folderUris = await vscode.window.showOpenDialog({
+            canSelectFiles: false,
+            canSelectFolders: true,
+            canSelectMany: true,
+            openLabel: 'Upload Folder'
+        });
+
+        if (!folderUris || folderUris.length === 0) {
+            return;
+        }
+
+        let successCount = 0;
+        let errorCount = 0;
+
+        for (const folderUri of folderUris) {
+            try {
+                const folderName = path.basename(folderUri.fsPath);
+                const targetPath = `${parentPath}/${folderName}`.replace('//', '/');
+                await this.uploadFolderRecursive(folderUri.fsPath, targetPath);
+                successCount++;
+            } catch (error) {
+                console.error(`Failed to upload folder ${path.basename(folderUri.fsPath)}:`, error);
+                vscode.window.showErrorMessage(`Failed to upload folder ${path.basename(folderUri.fsPath)}: ${error}`);
+                errorCount++;
+            }
+        }
+
+        this.refresh();
+
+        if (successCount > 0) {
+            vscode.window.showInformationMessage(`Successfully uploaded ${successCount} folder(s).`);
+        }
+        if (errorCount > 0) {
+            vscode.window.showWarningMessage(`Failed to upload ${errorCount} folder(s).`);
+        }
     }
 
     async downloadFile(item: FileItem): Promise<void> {
-        vscode.window.showInformationMessage('Download file functionality not implemented in base version.');
+        if (!this.isConnected || !this.axiosInstance) {
+            vscode.window.showErrorMessage('Not connected to Jupyter Server.');
+            return;
+        }
+
+        if (item.collapsible) {
+            vscode.window.showErrorMessage('Cannot download a directory. Please select a file.');
+            return;
+        }
+
+        const saveUri = await vscode.window.showSaveDialog({
+            defaultUri: vscode.Uri.file(item.label),
+            saveLabel: 'Download'
+        });
+
+        if (!saveUri) {
+            return;
+        }
+
+        try {
+            const cleanPath = item.uri.startsWith('/') ? item.uri.substring(1) : item.uri;
+            const apiUrl = `api/contents/${cleanPath}`;
+            
+            const response = await this.axiosInstance.get(apiUrl);
+            
+            if (response.data.type === 'file') {
+                const content = response.data.content;
+                let fileContent: Buffer;
+                
+                if (response.data.format === 'base64') {
+                    fileContent = Buffer.from(content, 'base64');
+                } else {
+                    fileContent = Buffer.from(content, 'utf8');
+                }
+                
+                await fs.promises.writeFile(saveUri.fsPath, fileContent);
+                vscode.window.showInformationMessage(`Successfully downloaded ${item.label}`);
+            } else {
+                vscode.window.showErrorMessage('Selected item is not a file.');
+            }
+        } catch (error) {
+            console.error('Download failed:', error);
+            vscode.window.showErrorMessage(`Failed to download ${item.label}: ${error}`);
+        }
     }
 
     // Drag and drop support methods
@@ -370,7 +628,90 @@ export class FileExplorerProvider implements vscode.TreeDataProvider<FileItem>, 
             return;
         }
         
-        vscode.window.showInformationMessage('External file upload via drag & drop is not implemented in this base version.');
+        // Handle external file drops
+        const uriListTransfer = dataTransfer.get('text/uri-list');
+        if (uriListTransfer) {
+            await this.handleExternalFileUpload(uriListTransfer, target);
+            return;
+        }
+        
+        vscode.window.showInformationMessage('No valid files detected in drop operation.');
+    }
+
+    private async handleExternalFileUpload(uriListTransfer: vscode.DataTransferItem, target: FileItem | undefined): Promise<void> {
+        try {
+            const uriListData = await uriListTransfer.asString();
+            console.log('URI list data:', uriListData);
+            
+            const lines = uriListData.split('\n').filter(line => line.trim() && !line.startsWith('#'));
+            const uris = lines
+                .map(line => {
+                    try {
+                        const trimmed = line.trim();
+                        if (trimmed.startsWith('file://')) {
+                            return vscode.Uri.parse(trimmed);
+                        } else if (fs.existsSync(trimmed)) {
+                            return vscode.Uri.file(trimmed);
+                        }
+                        return null;
+                    } catch (error) {
+                        console.error('Failed to parse URI:', line, error);
+                        return null;
+                    }
+                })
+                .filter(uri => uri !== null) as vscode.Uri[];
+
+            if (uris.length === 0) {
+                console.log('No valid URIs found in drop data');
+                return;
+            }
+
+            // Determine target path
+            let targetPath: string;
+            if (target) {
+                targetPath = target.collapsible ? target.uri : this.extractParentPath(target.uri);
+            } else {
+                targetPath = this.remotePath;
+            }
+
+            console.log(`Uploading ${uris.length} items to: ${targetPath}`);
+
+            let successCount = 0;
+            let errorCount = 0;
+
+            for (const uri of uris) {
+                if (uri.scheme === 'file') {
+                    try {
+                        const stat = await fs.promises.stat(uri.fsPath);
+                        if (stat.isFile()) {
+                            await this.uploadSingleFile(uri.fsPath, targetPath);
+                            successCount++;
+                        } else if (stat.isDirectory()) {
+                            const folderName = path.basename(uri.fsPath);
+                            await this.uploadFolderRecursive(uri.fsPath, `${targetPath}/${folderName}`.replace('//', '/'));
+                            successCount++;
+                        }
+                    } catch (error) {
+                        console.error(`Failed to upload ${path.basename(uri.fsPath)}:`, error);
+                        vscode.window.showErrorMessage(`Failed to upload ${path.basename(uri.fsPath)}: ${error}`);
+                        errorCount++;
+                    }
+                }
+            }
+
+            this.refresh();
+
+            if (successCount > 0) {
+                vscode.window.showInformationMessage(`Successfully uploaded ${successCount} item(s) via drag & drop.`);
+            }
+            if (errorCount > 0) {
+                vscode.window.showWarningMessage(`Failed to upload ${errorCount} item(s). Check the output for details.`);
+            }
+
+        } catch (error) {
+            console.error('External file upload failed:', error);
+            vscode.window.showErrorMessage(`Failed to upload files: ${error}`);
+        }
     }
 
     private async handleInternalMove(transferItem: vscode.DataTransferItem, target: FileItem | undefined): Promise<void> {
@@ -484,6 +825,123 @@ export class FileExplorerProvider implements vscode.TreeDataProvider<FileItem>, 
                 throw new Error(`Move failed: ${error.message}`);
             }
         }
+    }
+
+    private async uploadSingleFile(localFilePath: string, remotePath: string): Promise<void> {
+        if (!this.axiosInstance) {
+            throw new Error('Not connected to Jupyter Server');
+        }
+
+        try {
+            const fileName = path.basename(localFilePath);
+            const targetPath = `${remotePath}/${fileName}`.replace('//', '/');
+            const cleanTargetPath = targetPath.startsWith('/') ? targetPath.substring(1) : targetPath;
+            
+            console.log(`Uploading file: ${localFilePath}`);
+            console.log(`Target path: ${targetPath}`);
+            console.log(`Clean target path: ${cleanTargetPath}`);
+            console.log(`API URL will be: api/contents/${cleanTargetPath}`);
+            
+            const fileContent = await fs.promises.readFile(localFilePath);
+            
+            // Determine if file is binary or text
+            const isBinary = this.isBinaryFile(localFilePath);
+            console.log(`File is binary: ${isBinary}`);
+            
+            const apiUrl = `api/contents/${cleanTargetPath}`;
+            
+            const requestData = {
+                type: 'file',
+                format: isBinary ? 'base64' : 'text',
+                content: isBinary ? fileContent.toString('base64') : fileContent.toString('utf8')
+            };
+            
+            console.log(`Request data:`, {
+                type: requestData.type,
+                format: requestData.format,
+                contentLength: requestData.content.length
+            });
+            
+            const response = await this.axiosInstance.put(apiUrl, requestData);
+            console.log(`Successfully uploaded: ${fileName}`, response.status);
+            
+        } catch (error: any) {
+            console.error('Upload failed:', error);
+            console.error('Error details:', {
+                message: error.message,
+                status: error.response?.status,
+                statusText: error.response?.statusText,
+                data: error.response?.data,
+                url: error.config?.url,
+                method: error.config?.method
+            });
+            throw new Error(`Upload failed for ${path.basename(localFilePath)}: ${error.response?.data?.message || error.message}`);
+        }
+    }
+
+    private async uploadFolderRecursive(localFolderPath: string, remotePath: string): Promise<void> {
+        if (!this.axiosInstance) {
+            throw new Error('Not connected to Jupyter Server');
+        }
+
+        try {
+            console.log(`Uploading folder: ${localFolderPath}`);
+            console.log(`Remote path: ${remotePath}`);
+            
+            // Create the directory first
+            const cleanRemotePath = remotePath.startsWith('/') ? remotePath.substring(1) : remotePath;
+            const apiUrl = `api/contents/${cleanRemotePath}`;
+            
+            console.log(`Creating directory at: ${apiUrl}`);
+            
+            const dirResponse = await this.axiosInstance.put(apiUrl, {
+                type: 'directory'
+            });
+            console.log(`Directory created successfully:`, dirResponse.status);
+            
+            // Read directory contents
+            const entries = await fs.promises.readdir(localFolderPath, { withFileTypes: true });
+            console.log(`Found ${entries.length} entries in folder`);
+            
+            for (const entry of entries) {
+                const localEntryPath = path.join(localFolderPath, entry.name);
+                const remoteEntryPath = `${remotePath}/${entry.name}`.replace('//', '/');
+                
+                console.log(`Processing entry: ${entry.name} (${entry.isDirectory() ? 'directory' : 'file'})`);
+                
+                if (entry.isDirectory()) {
+                    await this.uploadFolderRecursive(localEntryPath, remoteEntryPath);
+                } else if (entry.isFile()) {
+                    await this.uploadSingleFile(localEntryPath, remotePath);
+                }
+            }
+            
+        } catch (error: any) {
+            console.error('Folder upload failed:', error);
+            console.error('Folder upload error details:', {
+                message: error.message,
+                status: error.response?.status,
+                statusText: error.response?.statusText,
+                data: error.response?.data,
+                url: error.config?.url,
+                method: error.config?.method
+            });
+            throw new Error(`Folder upload failed for ${path.basename(localFolderPath)}: ${error.response?.data?.message || error.message}`);
+        }
+    }
+
+    private isBinaryFile(filePath: string): boolean {
+        const ext = path.extname(filePath).toLowerCase();
+        const binaryExtensions = [
+            '.jpg', '.jpeg', '.png', '.gif', '.bmp', '.ico', '.tiff', '.webp',
+            '.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx',
+            '.zip', '.tar', '.gz', '.rar', '.7z',
+            '.exe', '.dll', '.so', '.dylib',
+            '.mp3', '.mp4', '.avi', '.mov', '.wav', '.flac',
+            '.bin', '.dat', '.db', '.sqlite',
+            '.woff', '.woff2', '.ttf', '.otf'
+        ];
+        return binaryExtensions.includes(ext);
     }
 }
 
