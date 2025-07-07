@@ -4,18 +4,11 @@ JupyterHub File Explorer is a Visual Studio Code extension that allows you to br
 
 ## Features
 
-- **Intuitive Connection Management**: A clear connect/disconnect flow with a welcome screen to guide you.
-- **Save Multiple Connections**: Save and quickly switch between multiple Jupyter Server configurations.
-- **Full File Operations**: Create, read, update, delete, and rename files and folders on the remote server.
-  - **Enhanced Folder Deletion**: Automatically handles recursive deletion of folders containing files and subdirectories
-  - **Smart Cleanup**: Detects and handles "directory not empty" errors with detailed logging for troubleshooting
-- **Context-Aware File Creation**: Create files and folders either in the current directory (via context menu) or in the root directory (via toolbar).
-- **Drag & Drop File Management**: 
-  - Upload files from your OS by dragging them into the explorer
-  - Move files and folders within the remote server by dragging them between directories
-  - Support for multiple file selection and batch operations
-- **Auto-Reconnect & Directory Memory**: Automatically reconnect on connection loss and remember last directory for each connection.
-- **Context-Aware UI**: Buttons and menus appear only when they are relevant.
+- **Intuitive Connection Management**: Save and switch between multiple Jupyter Server configurations.
+- **Complete File Management**: Create, edit, delete, rename, and organize files and folders on remote servers.
+- **Drag & Drop Support**: Upload files from your OS or move files within the remote server by dragging and dropping.
+- **Enhanced File Editing**: Automatic syntax highlighting for popular programming languages and configuration files.
+- **Auto-Reconnect**: Automatically reconnect when connection is lost and remember your last directory.
 
 ## Installation
 
@@ -42,72 +35,18 @@ All connection commands can be accessed from the Command Palette (`Ctrl+Shift+P`
 
 ### Exploring and Managing Files
 
-- Once connected, the file explorer will show the contents of your remote path.
-- **View Title Bar** (Toolbar Actions):
-    - **Disconnect**: Disconnects from the current server.
-    - **Refresh**: Reloads the file and folder list.
-    - **New File in Root Directory**: Creates a new file in the root directory of your remote path.
-    - **New Folder in Root Directory**: Creates a new folder in the root directory of your remote path.
-    - **Upload File**: Upload files from your local machine to the root directory.
-    - **Upload Folder**: Upload entire folders from your local machine to the root directory.
-- **Context Menus** (Right-click Actions): 
-    - **On directories**: Right-click on a directory to access actions:
-        - **New File**: Creates a new file **within the selected directory**.
-        - **New Folder**: Creates a new folder **within the selected directory**.
-        - **Upload File**: Upload files **into the selected directory**.
-        - **Upload Folder**: Upload folders **into the selected directory**.
-        - **Rename**: Rename the selected directory.
-        - **Delete**: Delete the selected directory.
-    - **On files**: Right-click on a file to access actions:
-        - **Download File**: Download the file to your local machine.
-        - **Rename**: Rename the selected file.
-        - **Delete**: Delete the selected file.
+Once connected, the file explorer shows your remote files and folders. You can:
 
-#### Upload & Download Features
-
-The extension supports multiple ways to transfer files:
-
-1. **Manual Upload**:
-   - Use toolbar buttons to upload to root directory
-   - Use context menu on directories to upload into specific folders
-   - Support for both individual files and entire folder structures
-
-2. **Drag & Drop Upload**:
-   - **Drag files or folders** from your operating system directly into the JupyterHub file explorer
-   - Drop onto directories to upload into that specific directory
-   - Drop onto empty space to upload to the current directory
-   - Supports multiple files and nested folder structures
-
-3. **Internal File Movement**:
-   - **Drag and drop files and folders within the explorer** to move them between directories
-   - Drag files from one folder and drop onto another folder to move them
-   - Supports moving multiple files at once by selecting them and dragging
-   - Prevents moving directories into themselves or their subdirectories
-   - Real-time feedback for successful or failed move operations
-
-4. **Download**:
-   - Right-click any file and select "Download File"
-   - Choose where to save the file on your local machine
-
-#### File Creation Behavior
-
-The extension provides two different ways to create files and folders:
-
-1. **Toolbar Buttons** (View Title Bar): Always create in the **root directory**
-   - Use these when you want to add items to the top level of your remote path
-   
-2. **Context Menu** (Right-click): Create **within the selected directory**
-   - Right-click on any directory to create files/folders inside it
-   - This allows you to organize your files in the proper subdirectories
-
-#### File Editing
-
-- **Double-click** or **single-click** any file to open it for editing
-- **Save your changes** using `Ctrl+S` (Windows/Linux) or `Cmd+S` (Mac) to sync back to the remote Jupyter Server
+- **Create**: New files and folders using toolbar buttons or right-click context menus
+- **Upload**: Drag files from your computer or use upload buttons
+- **Download**: Right-click any file to download it
+- **Edit**: Click any file to open it with syntax highlighting
+- **Move**: Drag files between folders within the remote server
+- **Delete**: Remove files and folders (including non-empty folders)
 
 ## Configuration
 
-Your server connections are stored in your VS Code settings. You can manage them through the extension's UI or edit your `settings.json` file directly for advanced configuration.
+Your server connections are stored in VS Code settings. Use the extension's UI to manage them, or edit your `settings.json` file directly.
 
 The configuration is stored under the `jupyterFileExplorer.connections` property:
 
@@ -130,92 +69,44 @@ The configuration is stored under the `jupyterFileExplorer.connections` property
 
 ### Connection Parameters
 
-- **name**: A unique, descriptive name for your connection
+- **name**: A descriptive name for your connection
 - **url**: The base URL of your Jupyter Server or JupyterHub instance
 - **token**: Your Jupyter authentication token
-- **remotePath**: The remote directory path to browse (can be empty for root, or specify a subdirectory)
+- **remotePath**: The remote directory path to browse
 
-### Important: JupyterHub Path Requirements
+### JupyterHub Connections
 
-**For JupyterHub connections, you must specify the username in the remote path, otherwise the connection will not work.**
+For JupyterHub, include your username in the remote path:
 
-Example for JupyterHub:
 ```json
 {
-  "name": "JupyterHub Dev",
-  "url": "https://jupyterhub-dev.myserver.io",
+  "name": "JupyterHub",
+  "url": "https://jupyterhub.example.com",
   "token": "your-token-here",
   "remotePath": "/user/your-username/"
 }
 ```
 
-**Key Points:**
-- Always include `/user/your-username/` in the remote path for JupyterHub
-- Use your full username (including domain if applicable)
-- The path should start and end with forward slashes
-- This applies even when connecting to the "generic server" endpoint (e.g., My Server)
+### Settings
 
-### Advanced Configuration Options
+You can customize the extension's behavior:
 
-You can customize the extension's behavior through VS Code settings:
-
-- **`jupyterFileExplorer.autoReconnect`** (default: `true`): Automatically attempt to reconnect when connection is lost
-- **`jupyterFileExplorer.reconnectInterval`** (default: `5000`): Time in milliseconds between reconnection attempts  
-- **`jupyterFileExplorer.maxReconnectAttempts`** (default: `3`): Maximum number of reconnection attempts before giving up
-- **`jupyterFileExplorer.rememberLastDirectory`** (default: `true`): Remember the last opened directory for each connection
-
-Example settings configuration:
-```json
-{
-  "jupyterFileExplorer.autoReconnect": true,
-  "jupyterFileExplorer.reconnectInterval": 3000,
-  "jupyterFileExplorer.maxReconnectAttempts": 5,
-  "jupyterFileExplorer.rememberLastDirectory": true
-}
-```
+- **`jupyterFileExplorer.autoReconnect`** (default: `true`): Automatically reconnect when connection is lost
+- **`jupyterFileExplorer.reconnectInterval`** (default: `5000`): Time between reconnection attempts  
+- **`jupyterFileExplorer.maxReconnectAttempts`** (default: `3`): Maximum reconnection attempts
+- **`jupyterFileExplorer.rememberLastDirectory`** (default: `true`): Remember last opened directory
 
 ## Troubleshooting
 
-### Common Issues
+**Common Issues:**
+- **Connection Failed**: Check your server URL, token, and ensure the Jupyter Server is running
+- **Files Not Loading**: Verify your remote path and permissions
+- **File Opening Issues**: Try clicking "Open in Text Editor" if an error appears
 
-- **Connection Failed**: Verify your server URL, token, and that the Jupyter Server is running
-- **Files Not Loading**: Check your remote path and ensure you have proper permissions
-- **Can't Create Files**: Ensure you have write permissions in the target directory
-- **Can't Delete Non-Empty Folders**: The extension now supports recursive deletion of folders with files. If deletion fails:
-  - Check the VS Code Developer Console for detailed error logs
-  - Ensure you have proper permissions to delete all files in the folder
-  - Some Jupyter servers may have restrictions on deleting certain system files or hidden files
-  - Try deleting individual files first if the folder contains many items
-- **Auto-reconnect Not Working**: Check that `jupyterFileExplorer.autoReconnect` is enabled in your settings
-- **Directory Not Remembered**: Ensure `jupyterFileExplorer.rememberLastDirectory` is enabled in your settings
-- **Drag & Drop Not Working**: 
-  - **For external files**: Make sure you're dragging files/folders from your operating system file manager
-  - **For internal moves**: Make sure you're dragging files/folders within the JupyterHub explorer tree view
-  - Try dropping directly onto a directory in the tree view
-  - If drag & drop fails, use the upload buttons for external files or rename operations for moves as alternatives
-  - Check the VS Code Developer Console (Help → Toggle Developer Tools) for debugging information
-  - For internal moves, ensure you're not trying to move a directory into itself
-
-### Auto-Reconnect Feature
-
-The extension automatically attempts to reconnect when it detects connection issues such as:
-- Network timeouts
-- Server errors (500, 502, 503, 504)
-- Authentication errors (401, 403)
-- Connection refused errors
-
-When auto-reconnect is triggered:
-1. You'll see a notification about the reconnection attempt
-2. The extension will retry up to the configured maximum attempts
-3. If successful, you'll be notified and can continue working
-4. If all attempts fail, you'll need to reconnect manually
-
-### Getting Help
-
-If you encounter issues:
-1. Check the VS Code Output panel for detailed error messages
+**Need Help?**
+1. Check the VS Code Output panel for error messages
 2. Verify your connection settings
-3. Report issues on the [GitHub repository](https://github.com/sdaza/jupyterhub-file-explorer)
+3. Report issues on [GitHub](https://github.com/sdaza/jupyterhub-file-explorer)
 
 ## License
 

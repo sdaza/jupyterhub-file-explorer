@@ -119,17 +119,53 @@ export class FileExplorerProvider implements vscode.TreeDataProvider<FileItem>, 
 
         try {
             const fileName = filePath.split('/').pop() || 'untitled';
-            const uri = vscode.Uri.parse(`jupyter-remote:/${filePath}`);
+            const extension = fileName.split('.').pop()?.toLowerCase();
+            
+            // Handle Jupyter notebooks specially
+            if (extension === 'ipynb') {
+                await this.openJupyterNotebook(filePath);
+                return;
+            }
+
+            const uri = vscode.Uri.parse(`jupyter-remote:/${filePath}`).with({
+                path: `/${filePath}`,
+                fragment: fileName // This helps VS Code identify the file type
+            });
 
             // Open the document with the custom URI
             const document = await vscode.workspace.openTextDocument(uri);
+            
+            // Set the language before showing the document for better syntax highlighting
+            const languageId = this.getLanguageId(fileName);
+            if (languageId !== 'plaintext') {
+                await vscode.languages.setTextDocumentLanguage(document, languageId);
+            }
+            
             await vscode.window.showTextDocument(document);
 
-            // Set the file name and language
-            await vscode.languages.setTextDocumentLanguage(document, this.getLanguageId(fileName));
-
         } catch (error) {
-            vscode.window.showErrorMessage('Failed to open file.');
+            console.error('Failed to open file:', error);
+            vscode.window.showErrorMessage(`Failed to open file: ${error}`);
+        }
+    }
+
+    private async openJupyterNotebook(filePath: string): Promise<void> {
+        try {
+            const uri = vscode.Uri.parse(`jupyter-remote:/${filePath}`);
+            
+            // Try to open as notebook first
+            try {
+                await vscode.commands.executeCommand('vscode.openWith', uri, 'jupyter-notebook');
+            } catch (notebookError) {
+                // Fallback to text editor if notebook extension is not available
+                console.log('Jupyter notebook extension not available, opening as text');
+                const document = await vscode.workspace.openTextDocument(uri);
+                await vscode.languages.setTextDocumentLanguage(document, 'json');
+                await vscode.window.showTextDocument(document);
+            }
+        } catch (error) {
+            console.error('Failed to open Jupyter notebook:', error);
+            vscode.window.showErrorMessage(`Failed to open notebook: ${error}`);
         }
     }
 
@@ -140,23 +176,208 @@ export class FileExplorerProvider implements vscode.TreeDataProvider<FileItem>, 
 
         const apiUrl = `api/contents/${filePath}`;
         try {
+            console.log(`Fetching file content from: ${apiUrl}`);
             const response = await this.axiosInstance.get(apiUrl);
-            return response.data.content;
-        } catch (error) {
+            
+            if (!response.data) {
+                throw new Error('No data received from server');
+            }
+            
+            // Check if the file content format is available
+            const content = response.data.content;
+            const format = response.data.format;
+            const type = response.data.type;
+            
+            console.log(`File type: ${type}, format: ${format}`);
+            
+            // Handle different content formats
+            if (type === 'directory') {
+                throw new Error('Cannot read directory as file');
+            } else if (format === 'base64') {
+                // For binary files, Jupyter returns base64
+                try {
+                    return Buffer.from(content, 'base64').toString('utf-8');
+                } catch (decodeError) {
+                    // If UTF-8 decoding fails, return as binary string
+                    return Buffer.from(content, 'base64').toString('binary');
+                }
+            } else if (format === 'text' || format === 'json') {
+                // For text files, content is directly available
+                // For notebooks (JSON format), content might be an object that needs stringification
+                if (typeof content === 'object' && content !== null) {
+                    return JSON.stringify(content, null, 2);
+                } else {
+                    return content || '';
+                }
+            } else {
+                // Default to treating as text
+                if (typeof content === 'object' && content !== null) {
+                    return JSON.stringify(content, null, 2);
+                } else {
+                    return content || '';
+                }
+            }
+        } catch (error: any) {
             console.error('Failed to fetch file content:', error);
-            throw new Error('Failed to fetch file content from Jupyter Server.');
+            if (error.response?.status === 404) {
+                throw new Error('File not found');
+            } else if (error.response?.status === 403) {
+                throw new Error('Permission denied');
+            } else {
+                throw new Error(`Failed to fetch file content: ${error.message}`);
+            }
         }
     }
 
     private getLanguageId(fileName: string): string {
+        // Handle special filenames first (before extension-based detection)
+        const lowerFileName = fileName.toLowerCase();
+        
+        // Special Python project files
+        if (lowerFileName === 'uv.lock' || lowerFileName === 'poetry.lock') {
+            return 'toml';
+        }
+        
+        // Special configuration files
+        if (lowerFileName === 'dockerfile' || lowerFileName.startsWith('dockerfile.')) {
+            return 'dockerfile';
+        }
+        
+        if (lowerFileName === '.gitignore' || lowerFileName === 'gitignore') {
+            return 'gitignore';
+        }
+        
+        if (lowerFileName === '.env' || lowerFileName.startsWith('.env.')) {
+            return 'dotenv';
+        }
+        
+        // Cargo files (Rust)
+        if (lowerFileName === 'cargo.lock' || lowerFileName === 'cargo.toml') {
+            return 'toml';
+        }
+        
+        // Python project files
+        if (lowerFileName === 'pyproject.toml' || lowerFileName === 'pipfile' || lowerFileName === 'pipfile.lock') {
+            return 'toml';
+        }
+        
+        // Now handle extension-based detection
         const extension = fileName.split('.').pop()?.toLowerCase();
         switch (extension) {
+            // Programming Languages
             case 'py':
                 return 'python';
             case 'js':
                 return 'javascript';
             case 'ts':
                 return 'typescript';
+            case 'java':
+                return 'java';
+            case 'c':
+                return 'c';
+            case 'cpp':
+            case 'cc':
+            case 'cxx':
+                return 'cpp';
+            case 'cs':
+                return 'csharp';
+            case 'php':
+                return 'php';
+            case 'rb':
+                return 'ruby';
+            case 'go':
+                return 'go';
+            case 'rs':
+                return 'rust';
+            case 'swift':
+                return 'swift';
+            case 'kt':
+                return 'kotlin';
+            case 'scala':
+                return 'scala';
+            case 'r':
+                return 'r';
+            case 'matlab':
+            case 'm':
+                return 'matlab';
+            
+            // Database
+            case 'sql':
+                return 'sql';
+            case 'psql':
+                return 'postgres';
+            
+            // Web Technologies
+            case 'html':
+            case 'htm':
+                return 'html';
+            case 'css':
+                return 'css';
+            case 'scss':
+                return 'scss';
+            case 'sass':
+                return 'sass';
+            case 'less':
+                return 'less';
+            case 'jsx':
+                return 'javascriptreact';
+            case 'tsx':
+                return 'typescriptreact';
+            case 'vue':
+                return 'vue';
+            
+            // Data Formats
+            case 'json':
+                return 'json';
+            case 'xml':
+                return 'xml';
+            case 'yaml':
+            case 'yml':
+                return 'yaml';
+            case 'toml':
+                return 'toml';
+            case 'csv':
+                return 'csv';
+            
+            // Markup Languages
+            case 'md':
+            case 'markdown':
+                return 'markdown';
+            case 'rst':
+                return 'restructuredtext';
+            case 'tex':
+                return 'latex';
+            
+            // Shell Scripts
+            case 'sh':
+            case 'bash':
+                return 'shellscript';
+            case 'ps1':
+                return 'powershell';
+            case 'bat':
+            case 'cmd':
+                return 'bat';
+            
+            // Configuration Files
+            case 'dockerfile':
+                return 'dockerfile';
+            case 'gitignore':
+                return 'gitignore';
+            case 'env':
+                return 'dotenv';
+            case 'ini':
+                return 'ini';
+            case 'conf':
+            case 'config':
+                return 'properties';
+            case 'lock':
+                // Most .lock files are TOML or JSON, default to TOML for Python ecosystem
+                return 'toml';
+            
+            // Notebook files
+            case 'ipynb':
+                return 'json'; // Fallback for when notebook editor is not available
+            
             // Add more mappings as needed
             default:
                 return 'plaintext';
@@ -187,14 +408,37 @@ export class FileExplorerProvider implements vscode.TreeDataProvider<FileItem>, 
         return new vscode.Disposable(() => {});
     }
 
-    stat(uri: vscode.Uri): vscode.FileStat {
-        // This is a simplified stat. A real implementation would query the server.
-        return {
-            type: vscode.FileType.File,
-            ctime: Date.now(),
-            mtime: Date.now(),
-            size: 0
-        };
+    stat(uri: vscode.Uri): vscode.FileStat | Thenable<vscode.FileStat> {
+        if (!this.isConnected || !this.axiosInstance) {
+            throw vscode.FileSystemError.NoPermissions('Not connected to Jupyter Server.');
+        }
+
+        const filePath = uri.path.startsWith('/') ? uri.path.substring(1) : uri.path;
+        const apiUrl = `api/contents/${filePath}`;
+        
+        return this.axiosInstance.get(apiUrl).then(response => {
+            const data = response.data;
+            
+            const isDirectory = data.type === 'directory';
+            const lastModified = data.last_modified ? new Date(data.last_modified).getTime() : Date.now();
+            const created = data.created ? new Date(data.created).getTime() : lastModified;
+            
+            return {
+                type: isDirectory ? vscode.FileType.Directory : vscode.FileType.File,
+                ctime: created,
+                mtime: lastModified,
+                size: data.size || 0
+            };
+        }).catch(error => {
+            console.error('Failed to stat file:', error);
+            // Fallback to basic stat if server query fails
+            return {
+                type: vscode.FileType.File,
+                ctime: Date.now(),
+                mtime: Date.now(),
+                size: 0
+            };
+        });
     }
 
     readDirectory(uri: vscode.Uri): [string, vscode.FileType][] | Thenable<[string, vscode.FileType][]> {
@@ -221,10 +465,16 @@ export class FileExplorerProvider implements vscode.TreeDataProvider<FileItem>, 
 
     async readFile(uri: vscode.Uri): Promise<Uint8Array> {
         if (!this.isConnected || !this.axiosInstance) {
-            throw new Error('Not connected to Jupyter Server.');
+            throw vscode.FileSystemError.NoPermissions('Not connected to Jupyter Server.');
         }
-        const content = await this.fetchFileContent(uri.path.slice(1));
-        return Buffer.from(content);
+        
+        try {
+            const content = await this.fetchFileContent(uri.path.slice(1));
+            return Buffer.from(content, 'utf8');
+        } catch (error) {
+            console.error('Failed to read file:', error);
+            throw vscode.FileSystemError.FileNotFound(`Failed to read file: ${error}`);
+        }
     }
 
     async writeFile(uri: vscode.Uri, content: Uint8Array, options: { create: boolean; overwrite: boolean; }): Promise<void> {
@@ -245,7 +495,8 @@ export class FileExplorerProvider implements vscode.TreeDataProvider<FileItem>, 
         
         try {
             // First, check if this is a directory and if it has contents
-            const stat = await this.stat(uri);
+            const statResult = this.stat(uri);
+            const stat = await Promise.resolve(statResult);
             
             if (stat.type === vscode.FileType.Directory && options.recursive) {
                 // For directories, we need to handle recursive deletion
