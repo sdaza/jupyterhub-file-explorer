@@ -17,6 +17,22 @@ export function activate(context: vscode.ExtensionContext) {
         dragAndDropController: fileExplorerProvider
     });
 
+    // Auto-reconnect variables
+    let reconnectTimer: NodeJS.Timeout | undefined;
+    let reconnectAttempts = 0;
+    let lastConnection: Connection | undefined;
+
+    // Listen for connection loss events
+    fileExplorerProvider.onConnectionLost(() => {
+        const config = vscode.workspace.getConfiguration('jupyterFileExplorer');
+        const autoReconnect = config.get<boolean>('autoReconnect', true);
+        
+        if (autoReconnect && lastConnection) {
+            console.log('Connection lost event received, initiating auto-reconnect...');
+            connectToJupyter(lastConnection);
+        }
+    });
+
     const connectToJupyter = async (connection: Connection) => {
         try {
             await fileExplorerProvider.setConnection(connection.url, connection.token, connection.remotePath || '/', connection.name);
@@ -26,12 +42,51 @@ export function activate(context: vscode.ExtensionContext) {
                 vscode.commands.executeCommand('setContext', 'jupyterFileExplorer.connected', true);
                 vscode.window.showInformationMessage(`Connected to ${connection.name}.`);
                 treeView.title = connection.name;
+                
+                // Store successful connection for auto-reconnect and next startup
+                lastConnection = connection;
+                reconnectAttempts = 0;
+                
+                // Save last connection for auto-connect on startup
+                const config = vscode.workspace.getConfiguration('jupyterFileExplorer');
+                await config.update('lastConnection', connection, vscode.ConfigurationTarget.Global);
+                
+                // Clear any existing reconnect timer
+                if (reconnectTimer) {
+                    clearTimeout(reconnectTimer);
+                    reconnectTimer = undefined;
+                }
             } else {
                 throw new Error('Failed to create Axios instance.');
             }
         } catch (error) {
             vscode.commands.executeCommand('setContext', 'jupyterFileExplorer.connected', false);
-            vscode.window.showErrorMessage(`Failed to connect to Jupyter Server: ${error}`);
+            const errorMessage = `Failed to connect to Jupyter Server: ${error}`;
+            console.error(errorMessage);
+            
+            // Check if auto-reconnect is enabled and we have a connection to retry
+            const config = vscode.workspace.getConfiguration('jupyterFileExplorer');
+            const autoReconnect = config.get<boolean>('autoReconnect', true);
+            const maxAttempts = config.get<number>('maxReconnectAttempts', 3);
+            
+            if (autoReconnect && lastConnection && reconnectAttempts < maxAttempts) {
+                reconnectAttempts++;
+                const interval = config.get<number>('reconnectInterval', 5000);
+                
+                vscode.window.showWarningMessage(
+                    `Connection lost. Attempting to reconnect (${reconnectAttempts}/${maxAttempts})...`
+                );
+                
+                reconnectTimer = setTimeout(() => {
+                    connectToJupyter(lastConnection!);
+                }, interval);
+            } else {
+                vscode.window.showErrorMessage(errorMessage);
+                if (autoReconnect && reconnectAttempts >= maxAttempts) {
+                    vscode.window.showErrorMessage(`Auto-reconnect failed after ${maxAttempts} attempts.`);
+                    reconnectAttempts = 0;
+                }
+            }
         }
     };
 
@@ -40,6 +95,14 @@ export function activate(context: vscode.ExtensionContext) {
         vscode.commands.executeCommand('setContext', 'jupyterFileExplorer.connected', false);
         vscode.window.showInformationMessage('Disconnected from Jupyter Server.');
         treeView.title = 'Files';
+        
+        // Clear reconnect state
+        lastConnection = undefined;
+        reconnectAttempts = 0;
+        if (reconnectTimer) {
+            clearTimeout(reconnectTimer);
+            reconnectTimer = undefined;
+        }
     };
 
     let connectDisposable = vscode.commands.registerCommand('jupyterFileExplorer.connectJupyter', async () => {
@@ -205,6 +268,24 @@ export function activate(context: vscode.ExtensionContext) {
 
     // Set initial context
     vscode.commands.executeCommand('setContext', 'jupyterFileExplorer.connected', false);
+
+    // Auto-connect on startup if enabled
+    const autoConnectOnStartup = async () => {
+        const config = vscode.workspace.getConfiguration('jupyterFileExplorer');
+        const autoConnect = config.get<boolean>('autoConnect', false);
+        
+        if (autoConnect) {
+            const savedLastConnection = config.get<Connection>('lastConnection');
+            
+            if (savedLastConnection && savedLastConnection.name && savedLastConnection.url && savedLastConnection.token) {
+                console.log(`Auto-connecting to ${savedLastConnection.name}...`);
+                await connectToJupyter(savedLastConnection);
+            }
+        }
+    };
+
+    // Run auto-connect after a short delay to ensure extension is fully loaded
+    setTimeout(autoConnectOnStartup, 1000);
 }
 
 export function deactivate() {}

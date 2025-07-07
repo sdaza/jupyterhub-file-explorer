@@ -2,7 +2,7 @@
   "name": "jupyterhub-file-explorer",
   "displayName": "JupyterHub File Explorer",
   "description": "Browse and edit files on a remote JupyterHub Server.",
-  "version": "0.0.13",
+  "version": "0.0.14",
   "publisher": "SebastianDazaAranzaes",
   "engines": {
     "vscode": "^1.63.0"
@@ -242,6 +242,23 @@
             }
           }
         },
+        "jupyterFileExplorer.autoConnect": {
+          "type": "boolean",
+          "default": false,
+          "description": "Automatically connect to the last used connection on VS Code startup"
+        },
+        "jupyterFileExplorer.sortFiles": {
+          "type": "string",
+          "enum": ["name", "type", "size", "modified"],
+          "default": "type",
+          "description": "How to sort files in the explorer (type = directories first, then files alphabetically)"
+        },
+        "jupyterFileExplorer.sortOrder": {
+          "type": "string",
+          "enum": ["asc", "desc"],
+          "default": "asc",
+          "description": "Sort order for files (ascending or descending)"
+        },
         "jupyterFileExplorer.autoReconnect": {
           "type": "boolean",
           "default": true,
@@ -261,6 +278,11 @@
           "type": "boolean",
           "default": true,
           "description": "Remember the last opened directory for each connection"
+        },
+        "jupyterFileExplorer.lastConnection": {
+          "type": "object",
+          "default": {},
+          "description": "Internal storage for the last used connection (managed automatically)"
         },
         "jupyterFileExplorer.lastDirectories": {
           "type": "object",

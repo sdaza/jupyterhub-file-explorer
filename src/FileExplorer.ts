@@ -7,6 +7,10 @@ export class FileExplorerProvider implements vscode.TreeDataProvider<FileItem>, 
     private _onDidChangeTreeData: vscode.EventEmitter<FileItem | undefined | null> = new vscode.EventEmitter<FileItem | undefined | null>();
     readonly onDidChangeTreeData: vscode.Event<FileItem | undefined | null> = this._onDidChangeTreeData.event;
 
+    // Connection lost event
+    private _onConnectionLost: vscode.EventEmitter<void> = new vscode.EventEmitter<void>();
+    readonly onConnectionLost: vscode.Event<void> = this._onConnectionLost.event;
+
     // Drag and drop support
     readonly dropMimeTypes = [
         'text/uri-list',
@@ -65,7 +69,32 @@ export class FileExplorerProvider implements vscode.TreeDataProvider<FileItem>, 
     }
 
     getTreeItem(element: FileItem): vscode.TreeItem {
+        // Try to enhance metadata for files if not already available
+        if (!element.fileSize && !element.collapsible) {
+            this.getFileInfo(element.uri).then(info => {
+                if (info) {
+                    element.updateMetadata(info);
+                    this._onDidChangeTreeData.fire(element);
+                }
+            }).catch(() => {
+                // Silently ignore errors for metadata fetching
+            });
+        }
+        
         return element;
+    }
+    
+    private async getFileInfo(filePath: string): Promise<any> {
+        try {
+            if (!this.axiosInstance) {
+                return null;
+            }
+            
+            const response = await this.axiosInstance.get(`/api/contents${filePath}`);
+            return response.data;
+        } catch (error) {
+            return null;
+        }
     }
 
     public setupAxiosInstance() {
@@ -81,6 +110,86 @@ export class FileExplorerProvider implements vscode.TreeDataProvider<FileItem>, 
         return this.axiosInstance;
     }
 
+    private handleConnectionLoss(): void {
+        console.log('Connection loss detected, emitting event...');
+        this._onConnectionLost.fire();
+    }
+
+    private sortItems(items: FileItem[]): FileItem[] {
+        const config = vscode.workspace.getConfiguration('jupyterFileExplorer');
+        const sortBy = config.get<string>('sortFiles', 'type');
+        const sortOrder = config.get<string>('sortOrder', 'asc');
+        const isDescending = sortOrder === 'desc';
+
+        return items.sort((a: FileItem, b: FileItem) => {
+            let comparison = 0;
+
+            switch (sortBy) {
+                case 'type':
+                    // Directories first, then files, both alphabetically
+                    if (a.collapsible && !b.collapsible) {
+                        comparison = -1;
+                    } else if (!a.collapsible && b.collapsible) {
+                        comparison = 1;
+                    } else {
+                        // Both same type, sort by name
+                        comparison = a.label.toLowerCase().localeCompare(b.label.toLowerCase());
+                    }
+                    break;
+
+                case 'name':
+                    comparison = a.label.toLowerCase().localeCompare(b.label.toLowerCase());
+                    break;
+
+                case 'size':
+                    // Directories have no size, put them first
+                    if (a.collapsible && !b.collapsible) {
+                        comparison = -1;
+                    } else if (!a.collapsible && b.collapsible) {
+                        comparison = 1;
+                    } else if (!a.collapsible && !b.collapsible) {
+                        // Both files, compare by size
+                        const sizeA = a.fileSize || 0;
+                        const sizeB = b.fileSize || 0;
+                        comparison = sizeA - sizeB;
+                    } else {
+                        // Both directories, sort by name
+                        comparison = a.label.toLowerCase().localeCompare(b.label.toLowerCase());
+                    }
+                    break;
+
+                case 'modified':
+                    // Directories have no modification date, put them first
+                    if (a.collapsible && !b.collapsible) {
+                        comparison = -1;
+                    } else if (!a.collapsible && b.collapsible) {
+                        comparison = 1;
+                    } else if (!a.collapsible && !b.collapsible) {
+                        // Both files, compare by modification date
+                        const dateA = a.lastModified ? a.lastModified.getTime() : 0;
+                        const dateB = b.lastModified ? b.lastModified.getTime() : 0;
+                        comparison = dateA - dateB;
+                    } else {
+                        // Both directories, sort by name
+                        comparison = a.label.toLowerCase().localeCompare(b.label.toLowerCase());
+                    }
+                    break;
+
+                default:
+                    // Default to type sorting
+                    if (a.collapsible && !b.collapsible) {
+                        comparison = -1;
+                    } else if (!a.collapsible && b.collapsible) {
+                        comparison = 1;
+                    } else {
+                        comparison = a.label.toLowerCase().localeCompare(b.label.toLowerCase());
+                    }
+            }
+
+            return isDescending ? -comparison : comparison;
+        });
+    }
+
     async getChildren(element?: FileItem): Promise<FileItem[]> {
         if (!this.isConnected || !this.axiosInstance) {
             return [];
@@ -93,7 +202,10 @@ export class FileExplorerProvider implements vscode.TreeDataProvider<FileItem>, 
 
         try {
             const response = await this.axiosInstance.get(apiUrl);
-            return response.data.content.map((item: any) => new FileItem(item.name, item.type === 'directory', item.path));
+            const items = response.data.content.map((item: any) => new FileItem(item.name, item.type === 'directory', item.path, item));
+            
+            // Sort items based on user configuration
+            return this.sortItems(items);
         } catch (error) {
             let errorMessage = `Failed to fetch file list from Jupyter Server. API URL: ${apiUrl}`;
             if (axios.isAxiosError(error)) {
@@ -101,6 +213,9 @@ export class FileExplorerProvider implements vscode.TreeDataProvider<FileItem>, 
                 if (error.response) {
                     errorMessage += ` Status: ${error.response.status}`;
                     errorMessage += ` Data: ${JSON.stringify(error.response.data)}`;
+                } else {
+                    // Network error or connection refused - likely connection lost
+                    this.handleConnectionLoss();
                 }
             } else {
                 errorMessage += ` ${error}`;
@@ -1343,15 +1458,27 @@ export class FileExplorerProvider implements vscode.TreeDataProvider<FileItem>, 
 }
 
 export class FileItem extends vscode.TreeItem {
+    public fileSize?: number;
+    public lastModified?: Date;
+    
     constructor(
         public readonly label: string,
         public readonly collapsible: boolean,
-        public readonly uri: string
+        public readonly uri: string,
+        fileInfo?: any
     ) {
         super(label, collapsible ? vscode.TreeItemCollapsibleState.Collapsed : vscode.TreeItemCollapsibleState.None);
-        this.tooltip = this.label;
-        this.description = this.uri;
+        
+        // Store file metadata if available
+        if (fileInfo) {
+            this.fileSize = fileInfo.size;
+            this.lastModified = fileInfo.last_modified ? new Date(fileInfo.last_modified) : undefined;
+        }
+        
+        this.tooltip = this.buildTooltip();
+        this.description = this.buildDescription();
         this.contextValue = collapsible ? 'directory' : 'file';
+        this.iconPath = this.getIcon();
 
         if (!collapsible) {
             this.command = {
@@ -1360,6 +1487,157 @@ export class FileItem extends vscode.TreeItem {
                 arguments: [this.uri]
             };
         }
+    }
+    
+    public updateMetadata(fileInfo: any): void {
+        this.fileSize = fileInfo.size;
+        this.lastModified = fileInfo.last_modified ? new Date(fileInfo.last_modified) : undefined;
+        this.tooltip = this.buildTooltip();
+        this.description = this.buildDescription();
+    }
+    
+    private buildTooltip(): string {
+        let tooltip = this.label;
+        
+        if (this.collapsible) {
+            tooltip += ' (Directory)';
+        } else {
+            if (this.fileSize !== undefined) {
+                tooltip += `\nSize: ${this.formatFileSize(this.fileSize)}`;
+            }
+            
+            if (this.lastModified) {
+                tooltip += `\nModified: ${this.lastModified.toLocaleDateString()} ${this.lastModified.toLocaleTimeString()}`;
+            }
+        }
+        
+        return tooltip;
+    }
+    
+    private buildDescription(): string {
+        if (this.collapsible) {
+            return '';
+        }
+        
+        const fileName = this.label as string;
+        const extension = fileName.split('.').pop()?.toLowerCase() || '';
+        let description = '';
+        
+        // Add file type description
+        if (extension) {
+            description = extension.toUpperCase();
+        }
+        
+        // Add file size if available
+        if (this.fileSize !== undefined) {
+            description += description ? ` • ${this.formatFileSize(this.fileSize)}` : this.formatFileSize(this.fileSize);
+        }
+        
+        return description;
+    }
+    
+    private getIcon(): vscode.ThemeIcon {
+        if (this.collapsible) {
+            return new vscode.ThemeIcon('folder', new vscode.ThemeColor('charts.yellow'));
+        }
+        
+        const fileName = this.label as string;
+        const extension = fileName.split('.').pop()?.toLowerCase() || '';
+        const lowerFileName = fileName.toLowerCase();
+        
+        // Special files first
+        if (lowerFileName === 'readme.md' || lowerFileName === 'readme') {
+            return new vscode.ThemeIcon('book', new vscode.ThemeColor('charts.blue'));
+        }
+        if (lowerFileName === 'dockerfile' || lowerFileName.startsWith('dockerfile.')) {
+            return new vscode.ThemeIcon('package', new vscode.ThemeColor('charts.purple'));
+        }
+        if (lowerFileName === '.gitignore') {
+            return new vscode.ThemeIcon('git-branch', new vscode.ThemeColor('charts.gray'));
+        }
+        if (lowerFileName === '.env' || lowerFileName.startsWith('.env.')) {
+            return new vscode.ThemeIcon('gear', new vscode.ThemeColor('charts.gray'));
+        }
+        if (lowerFileName === 'package.json' || lowerFileName === 'pyproject.toml') {
+            return new vscode.ThemeIcon('json', new vscode.ThemeColor('charts.green'));
+        }
+        if (lowerFileName === 'uv.lock' || lowerFileName === 'poetry.lock' || lowerFileName === 'cargo.lock') {
+            return new vscode.ThemeIcon('lock', new vscode.ThemeColor('charts.orange'));
+        }
+        if (lowerFileName === 'makefile') {
+            return new vscode.ThemeIcon('tools', new vscode.ThemeColor('charts.purple'));
+        }
+        
+        // Extension-based icons with colors
+        switch (extension) {
+            case 'py':
+                return new vscode.ThemeIcon('symbol-class', new vscode.ThemeColor('charts.blue'));
+            case 'js':
+            case 'jsx':
+                return new vscode.ThemeIcon('symbol-function', new vscode.ThemeColor('charts.yellow'));
+            case 'ts':
+            case 'tsx':
+                return new vscode.ThemeIcon('symbol-interface', new vscode.ThemeColor('charts.blue'));
+            case 'json':
+                return new vscode.ThemeIcon('json', new vscode.ThemeColor('charts.green'));
+            case 'ipynb':
+                return new vscode.ThemeIcon('notebook', new vscode.ThemeColor('charts.orange'));
+            case 'md':
+            case 'markdown':
+                return new vscode.ThemeIcon('markdown', new vscode.ThemeColor('charts.blue'));
+            case 'sql':
+                return new vscode.ThemeIcon('database', new vscode.ThemeColor('charts.purple'));
+            case 'toml':
+                return new vscode.ThemeIcon('settings-gear', new vscode.ThemeColor('charts.gray'));
+            case 'yaml':
+            case 'yml':
+                return new vscode.ThemeIcon('symbol-structure', new vscode.ThemeColor('charts.gray'));
+            case 'html':
+                return new vscode.ThemeIcon('code', new vscode.ThemeColor('charts.red'));
+            case 'css':
+            case 'scss':
+            case 'sass':
+                return new vscode.ThemeIcon('symbol-color', new vscode.ThemeColor('charts.blue'));
+            case 'xml':
+                return new vscode.ThemeIcon('symbol-structure', new vscode.ThemeColor('charts.green'));
+            case 'csv':
+                return new vscode.ThemeIcon('graph', new vscode.ThemeColor('charts.green'));
+            case 'png':
+            case 'jpg':
+            case 'jpeg':
+            case 'gif':
+            case 'svg':
+            case 'webp':
+                return new vscode.ThemeIcon('file-media', new vscode.ThemeColor('charts.purple'));
+            case 'pdf':
+                return new vscode.ThemeIcon('file-pdf', new vscode.ThemeColor('charts.red'));
+            case 'zip':
+            case 'tar':
+            case 'gz':
+            case 'rar':
+                return new vscode.ThemeIcon('file-zip', new vscode.ThemeColor('charts.orange'));
+            case 'sh':
+            case 'bash':
+                return new vscode.ThemeIcon('terminal', new vscode.ThemeColor('charts.green'));
+            case 'log':
+                return new vscode.ThemeIcon('output', new vscode.ThemeColor('charts.gray'));
+            case 'txt':
+                return new vscode.ThemeIcon('file-text', new vscode.ThemeColor('charts.gray'));
+            case 'lock':
+                return new vscode.ThemeIcon('lock', new vscode.ThemeColor('charts.orange'));
+            default:
+                return new vscode.ThemeIcon('file', new vscode.ThemeColor('charts.gray'));
+        }
+    }
+    
+    private formatFileSize(bytes: number): string {
+        if (bytes === 0) return '0 B';
+        
+        const k = 1024;
+        const sizes = ['B', 'KB', 'MB', 'GB'];
+        const i = Math.floor(Math.log(bytes) / Math.log(k));
+        
+        return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
     }
 }
 
