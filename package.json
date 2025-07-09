@@ -116,11 +116,6 @@
         "command": "jupyterFileExplorer.uploadFolder",
         "title": "Upload Folder",
         "icon": "$(folder-opened)"
-      },
-      {
-        "command": "jupyterFileExplorer.toggleHiddenFiles",
-        "title": "Toggle Hidden Files",
-        "icon": "$(eye)"
       }
     ],
     "menus": {
@@ -142,24 +137,6 @@
           "when": "view == jupyterFileExplorer && jupyterFileExplorer.connected",
           "group": "navigation@1",
           "icon": "$(sync)"
-        },
-        {
-          "command": "jupyterFileExplorer.toggleHiddenFiles",
-          "when": "view == jupyterFileExplorer && jupyterFileExplorer.connected",
-          "group": "navigation@2",
-          "icon": "$(eye)"
-        },
-        {
-          "command": "jupyterFileExplorer.newFileInRoot",
-          "when": "view == jupyterFileExplorer && jupyterFileExplorer.connected",
-          "group": "navigation@3",
-          "icon": "$(new-file)"
-        },
-        {
-          "command": "jupyterFileExplorer.newFolderInRoot",
-          "when": "view == jupyterFileExplorer && jupyterFileExplorer.connected",
-          "group": "navigation@4",
-          "icon": "$(new-folder)"
         },
         {
           "command": "jupyterFileExplorer.uploadFile",
@@ -269,11 +246,6 @@
           "enum": ["asc", "desc"],
           "default": "asc",
           "description": "Sort order for files (ascending or descending)"
-        },
-        "jupyterFileExplorer.showHiddenFiles": {
-          "type": "boolean",
-          "default": false,
-          "description": "Show hidden files and directories (files starting with '.')"
         },
         "jupyterFileExplorer.requestDelay": {
           "type": "number",

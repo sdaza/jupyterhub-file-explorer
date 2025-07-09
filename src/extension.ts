@@ -24,6 +24,9 @@ export function activate(context: vscode.ExtensionContext) {
         dragAndDropController: fileExplorerProvider
     });
 
+    // Initialize context for extension
+    vscode.commands.executeCommand('setContext', 'jupyterFileExplorer.connected', false);
+
     // Listen for connection loss events
     fileExplorerProvider.onConnectionLost(() => {
         const config = vscode.workspace.getConfiguration('jupyterFileExplorer');
@@ -219,10 +222,6 @@ export function activate(context: vscode.ExtensionContext) {
         fileExplorerProvider.refresh();
     });
 
-    let toggleHiddenFilesDisposable = vscode.commands.registerCommand('jupyterFileExplorer.toggleHiddenFiles', () => {
-        fileExplorerProvider.toggleHiddenFiles();
-    });
-
     let newFileDisposable = vscode.commands.registerCommand('jupyterFileExplorer.newFile', (item?: FileItem) => {
         fileExplorerProvider.newFile(item);
     });
@@ -279,7 +278,6 @@ export function activate(context: vscode.ExtensionContext) {
         removeConnectionDisposable,
         disconnectDisposable,
         refreshDisposable,
-        toggleHiddenFilesDisposable,
         newFileDisposable,
         newFolderDisposable,
         newFileInRootDisposable,

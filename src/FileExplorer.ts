@@ -163,22 +163,7 @@ export class FileExplorerProvider implements vscode.TreeDataProvider<FileItem>, 
         this._onDidChangeTreeData.fire(null);
     }
 
-    toggleHiddenFiles(): void {
-        const config = this.getConfig();
-        const currentValue = config.get<boolean>('showHiddenFiles', false);
-        const newValue = !currentValue;
-        
-        // Update the configuration
-        config.update('showHiddenFiles', newValue, vscode.ConfigurationTarget.Global).then(() => {
-            // Clear cache to force refresh with new filter
-            this.clearCache();
-            this.refresh();
-            
-            // Show user feedback
-            const message = newValue ? 'Hidden files are now visible' : 'Hidden files are now hidden';
-            vscode.window.showInformationMessage(message);
-        });
-    }
+
 
     getTreeItem(element: FileItem): vscode.TreeItem {
         // Try to enhance metadata for files if not already available
@@ -491,17 +476,9 @@ export class FileExplorerProvider implements vscode.TreeDataProvider<FileItem>, 
         });
     }
 
-    private filterHiddenFiles(items: FileItem[]): FileItem[] {
-        const config = this.getConfig();
-        const showHiddenFiles = config.get<boolean>('showHiddenFiles', false);
-        
-        if (showHiddenFiles) {
-            return items; // Show all files
-        }
-        
-        // Filter out hidden files (starting with '.')
-        return items.filter(item => !item.label.startsWith('.'));
-    }
+
+
+
 
     async getChildren(element?: FileItem): Promise<FileItem[]> {
         if (!this.isConnected || !this.axiosInstance) {
@@ -529,8 +506,7 @@ export class FileExplorerProvider implements vscode.TreeDataProvider<FileItem>, 
                 new FileItem(item.name, item.type === 'directory', item.path, item)
             );
             
-            const filteredItems = this.filterHiddenFiles(items);
-            return this.sortItems(filteredItems);
+            return this.sortItems(items);
         } catch (error) {
             console.error(`Error fetching children for ${apiUrl}:`, error);
             try {
