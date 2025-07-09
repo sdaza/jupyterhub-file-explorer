@@ -27,8 +27,11 @@ export class FileExplorerProvider implements vscode.TreeDataProvider<FileItem>, 
     // Rate limiting and caching
     private lastRequestTime: number = 0;
     private requestDelay: number = 100; // Minimum 100ms between requests
-    private cache = new Map<string, { data: any; timestamp: number }>();
+    private cache = new Map<string, { data: any; timestamp: number; size: number }>();
     private cacheTimeout: number = 5000; // Cache for 5 seconds
+    private maxCacheSize: number = 50; // Reduced from 100 to limit memory usage
+    private maxCacheMemory: number = 10 * 1024 * 1024; // 10MB max cache memory
+    private currentCacheMemory: number = 0;
     private pendingRequests = new Map<string, Promise<any>>();
 
     private _emitter = new vscode.EventEmitter<vscode.FileChangeEvent[]>();
@@ -43,21 +46,57 @@ export class FileExplorerProvider implements vscode.TreeDataProvider<FileItem>, 
         const config = vscode.workspace.getConfiguration('jupyterFileExplorer');
         this.requestDelay = config.get<number>('requestDelay', 100);
         this.cacheTimeout = config.get<number>('cacheTimeout', 5000);
+        this.maxCacheSize = config.get<number>('maxCacheSize', 50);
         
         // Clear cache if settings changed significantly
-        const maxCacheSize = config.get<number>('maxCacheSize', 100);
-        if (this.cache.size > maxCacheSize) {
+        if (this.cache.size > this.maxCacheSize) {
             this.clearCache();
         }
     }
 
+    // Lazy load configuration to avoid repeated calls
+    private _configCache: vscode.WorkspaceConfiguration | null = null;
+    private _configCacheTime: number = 0;
+    private _configCacheTimeout: number = 10000; // Cache config for 10 seconds
+
     private getConfig(): vscode.WorkspaceConfiguration {
-        return vscode.workspace.getConfiguration('jupyterFileExplorer');
+        const now = Date.now();
+        if (!this._configCache || now - this._configCacheTime > this._configCacheTimeout) {
+            this._configCache = vscode.workspace.getConfiguration('jupyterFileExplorer');
+            this._configCacheTime = now;
+        }
+        return this._configCache;
     }
 
     private clearCache(): void {
         this.cache.clear();
         this.pendingRequests.clear();
+        this.currentCacheMemory = 0;
+    }
+
+    private evictCacheIfNeeded(): void {
+        // Remove expired entries first
+        const now = Date.now();
+        for (const [key, entry] of this.cache) {
+            if (now - entry.timestamp > this.cacheTimeout) {
+                this.cache.delete(key);
+                this.currentCacheMemory -= entry.size;
+            }
+        }
+
+        // If still too large, remove oldest entries
+        while (this.cache.size > this.maxCacheSize || this.currentCacheMemory > this.maxCacheMemory) {
+            const oldestKey = this.cache.keys().next().value;
+            if (oldestKey) {
+                const entry = this.cache.get(oldestKey);
+                if (entry) {
+                    this.currentCacheMemory -= entry.size;
+                }
+                this.cache.delete(oldestKey);
+            } else {
+                break;
+            }
+        }
     }
 
     private invalidateCacheForPath(path: string): void {
@@ -151,6 +190,9 @@ export class FileExplorerProvider implements vscode.TreeDataProvider<FileItem>, 
         
         // Clear all caches to free memory
         this.clearCache();
+        
+        // Clear config cache
+        this._configCache = null;
         
         // Disconnect cleanly
         this.disconnect();
@@ -365,7 +407,12 @@ export class FileExplorerProvider implements vscode.TreeDataProvider<FileItem>, 
                 this.cache.delete(firstKey);
             }
         }
-        this.cache.set(key, { data, timestamp: Date.now() });
+        const dataSize = JSON.stringify(data).length;
+        this.cache.set(key, { data, timestamp: Date.now(), size: dataSize });
+        this.currentCacheMemory += dataSize;
+        
+        // Evict old entries if cache is too large
+        this.evictCacheIfNeeded();
     }
 
     private async makeRequestWithCache(url: string, options: any = {}): Promise<any> {

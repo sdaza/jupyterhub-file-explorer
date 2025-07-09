@@ -41,14 +41,18 @@ export function activate(context: vscode.ExtensionContext) {
     const startHealthChecks = () => {
         const config = vscode.workspace.getConfiguration('jupyterFileExplorer');
         const enableHealthChecks = config.get<boolean>('enableHealthChecks', true);
-        const healthCheckIntervalMs = config.get<number>('healthCheckInterval', 30000); // 30 seconds
+        const healthCheckIntervalMs = config.get<number>('healthCheckInterval', 60000); // Increased to 60 seconds to reduce overhead
         
         if (enableHealthChecks && !healthCheckInterval) {
             healthCheckInterval = setInterval(async () => {
                 if (fileExplorerProvider && lastConnection) {
-                    const isHealthy = await fileExplorerProvider.checkConnectionHealth();
-                    if (!isHealthy) {
-                        console.log('Health check failed, connection may be lost');
+                    try {
+                        const isHealthy = await fileExplorerProvider.checkConnectionHealth();
+                        if (!isHealthy) {
+                            console.log('Health check failed, connection may be lost');
+                        }
+                    } catch (error) {
+                        console.warn('Health check error (non-critical):', error);
                     }
                 }
             }, healthCheckIntervalMs);
@@ -131,140 +135,108 @@ export function activate(context: vscode.ExtensionContext) {
         }
     };
 
-    let connectDisposable = vscode.commands.registerCommand('jupyterFileExplorer.connectJupyter', async () => {
-        const config = vscode.workspace.getConfiguration('jupyterFileExplorer');
-        const connections = config.get<Connection[]>('connections') || [];
+    // Register all commands in a more efficient way
+    const commands = [
+        { id: 'jupyterFileExplorer.connectJupyter', handler: async () => {
+            const config = vscode.workspace.getConfiguration('jupyterFileExplorer');
+            const connections = config.get<Connection[]>('connections') || [];
 
-        if (connections.length === 0) {
-            vscode.window.showInformationMessage('No saved connections. Please add a new connection.');
-            await vscode.commands.executeCommand('jupyterFileExplorer.addJupyterConnection');
-            return;
-        }
-
-        const selected = await vscode.window.showQuickPick(connections.map(c => c.name), {
-            placeHolder: 'Select a Jupyter Server to connect to'
-        });
-
-        if (selected) {
-            const connection = connections.find(c => c.name === selected);
-            if (connection) {
-                await connectToJupyter(connection);
+            if (connections.length === 0) {
+                vscode.window.showInformationMessage('No saved connections. Please add a new connection.');
+                await vscode.commands.executeCommand('jupyterFileExplorer.addJupyterConnection');
+                return;
             }
-        }
-    });
 
-    let addConnectionDisposable = vscode.commands.registerCommand('jupyterFileExplorer.addJupyterConnection', async () => {
-        const name = await vscode.window.showInputBox({ prompt: 'Enter a name for this connection' });
-        if (!name) return;
+            const selected = await vscode.window.showQuickPick(connections.map(c => c.name), {
+                placeHolder: 'Select a Jupyter Server to connect to'
+            });
 
-        const url = await vscode.window.showInputBox({ prompt: 'Enter Jupyter Server URL', ignoreFocusOut: true });
-        if (!url) return;
-
-        const token = await vscode.window.showInputBox({ prompt: 'Enter Jupyter Token', password: true, ignoreFocusOut: true });
-        if (!token) return;
-
-        const remotePath = await vscode.window.showInputBox({ prompt: 'Enter Remote Path', value: '/', ignoreFocusOut: true });
-
-        const newConnection: Connection = { name, url, token, remotePath: remotePath || '/' };
-
-        const config = vscode.workspace.getConfiguration('jupyterFileExplorer');
-        const connections = config.get<Connection[]>('connections') || [];
-        connections.push(newConnection);
-        await config.update('connections', connections, vscode.ConfigurationTarget.Global);
-
-        vscode.window.showInformationMessage(`Connection '${name}' saved.`);
-    });
-
-    let selectConnectionDisposable = vscode.commands.registerCommand('jupyterFileExplorer.selectJupyterConnection', async () => {
-        const config = vscode.workspace.getConfiguration('jupyterFileExplorer');
-        const connections = config.get<Connection[]>('connections') || [];
-
-        if (connections.length === 0) {
-            vscode.window.showInformationMessage('No saved connections found.');
-            return;
-        }
-
-        const selected = await vscode.window.showQuickPick(connections.map(c => c.name), {
-            placeHolder: 'Select a connection'
-        });
-
-        if (selected) {
-            const connection = connections.find(c => c.name === selected);
-            if (connection) {
-                await connectToJupyter(connection);
+            if (selected) {
+                const connection = connections.find(c => c.name === selected);
+                if (connection) {
+                    await connectToJupyter(connection);
+                }
             }
-        }
-    });
+        }},
+        { id: 'jupyterFileExplorer.addJupyterConnection', handler: async () => {
+            const name = await vscode.window.showInputBox({ prompt: 'Enter a name for this connection' });
+            if (!name) return;
 
-    let removeConnectionDisposable = vscode.commands.registerCommand('jupyterFileExplorer.removeJupyterConnection', async () => {
-        const config = vscode.workspace.getConfiguration('jupyterFileExplorer');
-        const connections = config.get<Connection[]>('connections') || [];
+            const url = await vscode.window.showInputBox({ prompt: 'Enter Jupyter Server URL', ignoreFocusOut: true });
+            if (!url) return;
 
-        if (connections.length === 0) {
-            vscode.window.showInformationMessage('No saved connections to remove.');
-            return;
-        }
+            const token = await vscode.window.showInputBox({ prompt: 'Enter Jupyter Token', password: true, ignoreFocusOut: true });
+            if (!token) return;
 
-        const selected = await vscode.window.showQuickPick(connections.map(c => c.name), {
-            placeHolder: 'Select a connection to remove'
-        });
+            const remotePath = await vscode.window.showInputBox({ prompt: 'Enter Remote Path', value: '/', ignoreFocusOut: true });
 
-        if (selected) {
-            const updatedConnections = connections.filter(c => c.name !== selected);
-            await config.update('connections', updatedConnections, vscode.ConfigurationTarget.Global);
-            vscode.window.showInformationMessage(`Connection '${selected}' removed.`);
-        }
-    });
+            const newConnection: Connection = { name, url, token, remotePath: remotePath || '/' };
 
-    let disconnectDisposable = vscode.commands.registerCommand('jupyterFileExplorer.disconnectJupyter', disconnectFromJupyter);
+            const config = vscode.workspace.getConfiguration('jupyterFileExplorer');
+            const connections = config.get<Connection[]>('connections') || [];
+            connections.push(newConnection);
+            await config.update('connections', connections, vscode.ConfigurationTarget.Global);
 
-    let refreshDisposable = vscode.commands.registerCommand('jupyterFileExplorer.refreshJupyterExplorer', () => {
-        fileExplorerProvider.refresh();
-    });
+            vscode.window.showInformationMessage(`Connection '${name}' saved.`);
+        }},
+        { id: 'jupyterFileExplorer.selectJupyterConnection', handler: async () => {
+            const config = vscode.workspace.getConfiguration('jupyterFileExplorer');
+            const connections = config.get<Connection[]>('connections') || [];
 
-    let newFileDisposable = vscode.commands.registerCommand('jupyterFileExplorer.newFile', (item?: FileItem) => {
-        fileExplorerProvider.newFile(item);
-    });
+            if (connections.length === 0) {
+                vscode.window.showInformationMessage('No saved connections found.');
+                return;
+            }
 
-    let newFolderDisposable = vscode.commands.registerCommand('jupyterFileExplorer.newFolder', (item?: FileItem) => {
-        fileExplorerProvider.newFolder(item);
-    });
+            const selected = await vscode.window.showQuickPick(connections.map(c => c.name), {
+                placeHolder: 'Select a connection'
+            });
 
-    let newFileInRootDisposable = vscode.commands.registerCommand('jupyterFileExplorer.newFileInRoot', () => {
-        fileExplorerProvider.newFileInRoot();
-    });
+            if (selected) {
+                const connection = connections.find(c => c.name === selected);
+                if (connection) {
+                    await connectToJupyter(connection);
+                }
+            }
+        }},
+        { id: 'jupyterFileExplorer.removeJupyterConnection', handler: async () => {
+            const config = vscode.workspace.getConfiguration('jupyterFileExplorer');
+            const connections = config.get<Connection[]>('connections') || [];
 
-    let newFolderInRootDisposable = vscode.commands.registerCommand('jupyterFileExplorer.newFolderInRoot', () => {
-        fileExplorerProvider.newFolderInRoot();
-    });
+            if (connections.length === 0) {
+                vscode.window.showInformationMessage('No saved connections to remove.');
+                return;
+            }
 
-    let uploadFileDisposable = vscode.commands.registerCommand('jupyterFileExplorer.uploadFile', (item?: FileItem) => {
-        fileExplorerProvider.uploadFile(item);
-    });
+            const selected = await vscode.window.showQuickPick(connections.map(c => c.name), {
+                placeHolder: 'Select a connection to remove'
+            });
 
-    let uploadFolderDisposable = vscode.commands.registerCommand('jupyterFileExplorer.uploadFolder', (item?: FileItem) => {
-        fileExplorerProvider.uploadFolder(item);
-    });
+            if (selected) {
+                const updatedConnections = connections.filter(c => c.name !== selected);
+                await config.update('connections', updatedConnections, vscode.ConfigurationTarget.Global);
+                vscode.window.showInformationMessage(`Connection '${selected}' removed.`);
+            }
+        }},
+        { id: 'jupyterFileExplorer.disconnectJupyter', handler: disconnectFromJupyter },
+        { id: 'jupyterFileExplorer.refreshJupyterExplorer', handler: () => fileExplorerProvider.refresh() },
+        { id: 'jupyterFileExplorer.newFile', handler: (item?: FileItem) => fileExplorerProvider.newFile(item) },
+        { id: 'jupyterFileExplorer.newFolder', handler: (item?: FileItem) => fileExplorerProvider.newFolder(item) },
+        { id: 'jupyterFileExplorer.newFileInRoot', handler: () => fileExplorerProvider.newFileInRoot() },
+        { id: 'jupyterFileExplorer.newFolderInRoot', handler: () => fileExplorerProvider.newFolderInRoot() },
+        { id: 'jupyterFileExplorer.uploadFile', handler: (item?: FileItem) => fileExplorerProvider.uploadFile(item) },
+        { id: 'jupyterFileExplorer.uploadFolder', handler: (item?: FileItem) => fileExplorerProvider.uploadFolder(item) },
+        { id: 'jupyterFileExplorer.downloadFile', handler: (item: FileItem) => fileExplorerProvider.downloadFile(item) },
+        { id: 'jupyterFileExplorer.renameFile', handler: (item: FileItem) => fileExplorerProvider.renameFile(item) },
+        { id: 'jupyterFileExplorer.deleteFile', handler: (item: FileItem) => fileExplorerProvider.deleteFile(item) },
+        { id: 'jupyterFileExplorer.forceDeleteFile', handler: (item: FileItem) => fileExplorerProvider.forceDeleteFile(item) },
+        { id: 'jupyterFileExplorer.openFile', handler: (filePath: string) => fileExplorerProvider.openFile(filePath) }
+    ];
 
-    let downloadFileDisposable = vscode.commands.registerCommand('jupyterFileExplorer.downloadFile', (item: FileItem) => {
-        fileExplorerProvider.downloadFile(item);
-    });
-
-    let renameFileDisposable = vscode.commands.registerCommand('jupyterFileExplorer.renameFile', (item: FileItem) => {
-        fileExplorerProvider.renameFile(item);
-    });
-
-    let deleteFileDisposable = vscode.commands.registerCommand('jupyterFileExplorer.deleteFile', (item: FileItem) => {
-        fileExplorerProvider.deleteFile(item);
-    });
-
-    let forceDeleteFileDisposable = vscode.commands.registerCommand('jupyterFileExplorer.forceDeleteFile', (item: FileItem) => {
-        fileExplorerProvider.forceDeleteFile(item);
-    });
-
-    let openFileDisposable = vscode.commands.registerCommand('jupyterFileExplorer.openFile', (filePath: string) => {
-        fileExplorerProvider.openFile(filePath);
-    });
+    // Register all commands and collect disposables
+    const commandDisposables = commands.map(cmd => 
+        vscode.commands.registerCommand(cmd.id, cmd.handler)
+    );
 
     // Register the FileSystemProvider
     context.subscriptions.push(vscode.workspace.registerFileSystemProvider('jupyter-remote', fileExplorerProvider, { 
@@ -272,23 +244,7 @@ export function activate(context: vscode.ExtensionContext) {
     }));
 
     context.subscriptions.push(
-        connectDisposable,
-        addConnectionDisposable,
-        selectConnectionDisposable,
-        removeConnectionDisposable,
-        disconnectDisposable,
-        refreshDisposable,
-        newFileDisposable,
-        newFolderDisposable,
-        newFileInRootDisposable,
-        newFolderInRootDisposable,
-        uploadFileDisposable,
-        uploadFolderDisposable,
-        downloadFileDisposable,
-        renameFileDisposable,
-        deleteFileDisposable,
-        forceDeleteFileDisposable,
-        openFileDisposable
+        ...commandDisposables
     );
     context.subscriptions.push(vscode.workspace.registerTextDocumentContentProvider('jupyter-remote', jupyterContentProvider));
 

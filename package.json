@@ -42,7 +42,8 @@
       "jupyter-container": [
         {
           "id": "jupyterFileExplorer",
-          "name": "Files"
+          "name": "Files",
+          "icon": "images/jupyter.png"
         }
       ]
     },
@@ -137,6 +138,18 @@
           "when": "view == jupyterFileExplorer && jupyterFileExplorer.connected",
           "group": "navigation@1",
           "icon": "$(sync)"
+        },
+        {
+          "command": "jupyterFileExplorer.newFileInRoot",
+          "when": "view == jupyterFileExplorer && jupyterFileExplorer.connected",
+          "group": "navigation@2",
+          "icon": "$(new-file)"
+        },
+        {
+          "command": "jupyterFileExplorer.newFolderInRoot",
+          "when": "view == jupyterFileExplorer && jupyterFileExplorer.connected",
+          "group": "navigation@3",
+          "icon": "$(new-folder)"
         },
         {
           "command": "jupyterFileExplorer.uploadFile",
@@ -302,6 +315,16 @@
           "type": "object",
           "default": {},
           "description": "Internal storage for last opened directories per connection (managed automatically)"
+        },
+        "jupyterFileExplorer.enableHealthChecks": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable periodic connection health checks"
+        },
+        "jupyterFileExplorer.healthCheckInterval": {
+          "type": "number",
+          "default": 60000,
+          "description": "Interval between health checks in milliseconds (increased default for performance)"
         }
       }
     }
