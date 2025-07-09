@@ -8,19 +8,21 @@ interface Connection {
     remotePath: string;
 }
 
+// Module-level variables for cleanup
+let fileExplorerProvider: FileExplorerProvider;
+let reconnectTimer: NodeJS.Timeout | undefined;
+let reconnectAttempts = 0;
+let lastConnection: Connection | undefined;
+let healthCheckInterval: NodeJS.Timeout | undefined;
+
 export function activate(context: vscode.ExtensionContext) {
-    const fileExplorerProvider = new FileExplorerProvider();
+    fileExplorerProvider = new FileExplorerProvider();
     const jupyterContentProvider = new JupyterContentProvider(fileExplorerProvider);
 
     const treeView = vscode.window.createTreeView('jupyterFileExplorer', { 
         treeDataProvider: fileExplorerProvider,
         dragAndDropController: fileExplorerProvider
     });
-
-    // Auto-reconnect variables
-    let reconnectTimer: NodeJS.Timeout | undefined;
-    let reconnectAttempts = 0;
-    let lastConnection: Connection | undefined;
 
     // Listen for connection loss events
     fileExplorerProvider.onConnectionLost(() => {
@@ -33,12 +35,31 @@ export function activate(context: vscode.ExtensionContext) {
         }
     });
 
+    const startHealthChecks = () => {
+        const config = vscode.workspace.getConfiguration('jupyterFileExplorer');
+        const enableHealthChecks = config.get<boolean>('enableHealthChecks', true);
+        const healthCheckIntervalMs = config.get<number>('healthCheckInterval', 30000); // 30 seconds
+        
+        if (enableHealthChecks && !healthCheckInterval) {
+            healthCheckInterval = setInterval(async () => {
+                if (fileExplorerProvider && lastConnection) {
+                    const isHealthy = await fileExplorerProvider.checkConnectionHealth();
+                    if (!isHealthy) {
+                        console.log('Health check failed, connection may be lost');
+                    }
+                }
+            }, healthCheckIntervalMs);
+        }
+    };
+
+    // Start health checks
+    startHealthChecks();
+
     const connectToJupyter = async (connection: Connection) => {
         try {
             await fileExplorerProvider.setConnection(connection.url, connection.token, connection.remotePath || '/', connection.name);
             const axiosInstance = fileExplorerProvider.getAxiosInstance();
             if (axiosInstance) {
-                jupyterContentProvider.setAxiosInstance(axiosInstance);
                 vscode.commands.executeCommand('setContext', 'jupyterFileExplorer.connected', true);
                 vscode.window.showInformationMessage(`Connected to ${connection.name}.`);
                 treeView.title = connection.name;
@@ -71,15 +92,17 @@ export function activate(context: vscode.ExtensionContext) {
             
             if (autoReconnect && lastConnection && reconnectAttempts < maxAttempts) {
                 reconnectAttempts++;
-                const interval = config.get<number>('reconnectInterval', 5000);
+                // Exponential backoff: 5s, 10s, 20s for attempts 1, 2, 3
+                const baseInterval = config.get<number>('reconnectInterval', 5000);
+                const backoffInterval = baseInterval * Math.pow(2, reconnectAttempts - 1);
                 
                 vscode.window.showWarningMessage(
-                    `Connection lost. Attempting to reconnect (${reconnectAttempts}/${maxAttempts})...`
+                    `Connection lost. Attempting to reconnect in ${backoffInterval/1000}s (${reconnectAttempts}/${maxAttempts})...`
                 );
                 
                 reconnectTimer = setTimeout(() => {
                     connectToJupyter(lastConnection!);
-                }, interval);
+                }, backoffInterval);
             } else {
                 vscode.window.showErrorMessage(errorMessage);
                 if (autoReconnect && reconnectAttempts >= maxAttempts) {
@@ -196,6 +219,10 @@ export function activate(context: vscode.ExtensionContext) {
         fileExplorerProvider.refresh();
     });
 
+    let toggleHiddenFilesDisposable = vscode.commands.registerCommand('jupyterFileExplorer.toggleHiddenFiles', () => {
+        fileExplorerProvider.toggleHiddenFiles();
+    });
+
     let newFileDisposable = vscode.commands.registerCommand('jupyterFileExplorer.newFile', (item?: FileItem) => {
         fileExplorerProvider.newFile(item);
     });
@@ -252,6 +279,7 @@ export function activate(context: vscode.ExtensionContext) {
         removeConnectionDisposable,
         disconnectDisposable,
         refreshDisposable,
+        toggleHiddenFilesDisposable,
         newFileDisposable,
         newFolderDisposable,
         newFileInRootDisposable,
@@ -288,4 +316,29 @@ export function activate(context: vscode.ExtensionContext) {
     setTimeout(autoConnectOnStartup, 1000);
 }
 
-export function deactivate() {}
+export function deactivate() {
+    console.log('JupyterHub File Explorer: Extension deactivating...');
+    
+    // Clear any pending reconnect timers
+    if (reconnectTimer) {
+        clearTimeout(reconnectTimer);
+        reconnectTimer = undefined;
+    }
+    
+    // Clear health check interval
+    if (healthCheckInterval) {
+        clearInterval(healthCheckInterval);
+        healthCheckInterval = undefined;
+    }
+    
+    // Perform graceful shutdown to clean up resources
+    if (fileExplorerProvider) {
+        fileExplorerProvider.gracefulShutdown();
+    }
+    
+    // Reset module variables
+    reconnectAttempts = 0;
+    lastConnection = undefined;
+    
+    console.log('JupyterHub File Explorer: Extension deactivated cleanly');
+}

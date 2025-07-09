@@ -2,7 +2,7 @@
   "name": "jupyterhub-file-explorer",
   "displayName": "JupyterHub File Explorer",
   "description": "Browse and edit files on a remote JupyterHub Server.",
-  "version": "0.0.14",
+  "version": "0.0.15",
   "publisher": "SebastianDazaAranzaes",
   "engines": {
     "vscode": "^1.63.0"
@@ -116,6 +116,11 @@
         "command": "jupyterFileExplorer.uploadFolder",
         "title": "Upload Folder",
         "icon": "$(folder-opened)"
+      },
+      {
+        "command": "jupyterFileExplorer.toggleHiddenFiles",
+        "title": "Toggle Hidden Files",
+        "icon": "$(eye)"
       }
     ],
     "menus": {
@@ -139,15 +144,21 @@
           "icon": "$(sync)"
         },
         {
-          "command": "jupyterFileExplorer.newFileInRoot",
+          "command": "jupyterFileExplorer.toggleHiddenFiles",
           "when": "view == jupyterFileExplorer && jupyterFileExplorer.connected",
           "group": "navigation@2",
+          "icon": "$(eye)"
+        },
+        {
+          "command": "jupyterFileExplorer.newFileInRoot",
+          "when": "view == jupyterFileExplorer && jupyterFileExplorer.connected",
+          "group": "navigation@3",
           "icon": "$(new-file)"
         },
         {
           "command": "jupyterFileExplorer.newFolderInRoot",
           "when": "view == jupyterFileExplorer && jupyterFileExplorer.connected",
-          "group": "navigation@3",
+          "group": "navigation@4",
           "icon": "$(new-folder)"
         },
         {
@@ -258,6 +269,37 @@
           "enum": ["asc", "desc"],
           "default": "asc",
           "description": "Sort order for files (ascending or descending)"
+        },
+        "jupyterFileExplorer.showHiddenFiles": {
+          "type": "boolean",
+          "default": false,
+          "description": "Show hidden files and directories (files starting with '.')"
+        },
+        "jupyterFileExplorer.requestDelay": {
+          "type": "number",
+          "default": 100,
+          "minimum": 50,
+          "maximum": 1000,
+          "description": "Minimum delay in milliseconds between API requests (helps prevent server overload)"
+        },
+        "jupyterFileExplorer.cacheTimeout": {
+          "type": "number",
+          "default": 5000,
+          "minimum": 1000,
+          "maximum": 30000,
+          "description": "Cache timeout in milliseconds for file listing requests"
+        },
+        "jupyterFileExplorer.maxCacheSize": {
+          "type": "number",
+          "default": 100,
+          "minimum": 10,
+          "maximum": 1000,
+          "description": "Maximum number of cached responses to keep in memory"
+        },
+        "jupyterFileExplorer.enableCaching": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable caching of API responses to reduce server load (disable for real-time updates)"
         },
         "jupyterFileExplorer.autoReconnect": {
           "type": "boolean",

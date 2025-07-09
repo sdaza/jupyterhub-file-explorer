@@ -24,48 +24,160 @@ export class FileExplorerProvider implements vscode.TreeDataProvider<FileItem>, 
     private axiosInstance: AxiosInstance | null = null;
     private isConnected: boolean = false;
 
+    // Rate limiting and caching
+    private lastRequestTime: number = 0;
+    private requestDelay: number = 100; // Minimum 100ms between requests
+    private cache = new Map<string, { data: any; timestamp: number }>();
+    private cacheTimeout: number = 5000; // Cache for 5 seconds
+    private pendingRequests = new Map<string, Promise<any>>();
+
     private _emitter = new vscode.EventEmitter<vscode.FileChangeEvent[]>();
     readonly onDidChangeFile: vscode.Event<vscode.FileChangeEvent[]> = this._emitter.event;
 
     constructor() {
         // Initialize with default values or prompt the user
+        this.updateConfigSettings();
+    }
+
+    private updateConfigSettings(): void {
+        const config = vscode.workspace.getConfiguration('jupyterFileExplorer');
+        this.requestDelay = config.get<number>('requestDelay', 100);
+        this.cacheTimeout = config.get<number>('cacheTimeout', 5000);
+        
+        // Clear cache if settings changed significantly
+        const maxCacheSize = config.get<number>('maxCacheSize', 100);
+        if (this.cache.size > maxCacheSize) {
+            this.clearCache();
+        }
+    }
+
+    private getConfig(): vscode.WorkspaceConfiguration {
+        return vscode.workspace.getConfiguration('jupyterFileExplorer');
+    }
+
+    private clearCache(): void {
+        this.cache.clear();
+        this.pendingRequests.clear();
+    }
+
+    private invalidateCacheForPath(path: string): void {
+        // Invalidate cache entries that might be affected by changes to this path
+        const keysToDelete: string[] = [];
+        for (const [key] of this.cache) {
+            if (key.includes(path) || path.includes(key.split(':')[1] || '')) {
+                keysToDelete.push(key);
+            }
+        }
+        keysToDelete.forEach(key => this.cache.delete(key));
     }
 
     async setConnection(url: string, token: string, remotePath: string, connectionName?: string) {
-        let serverUrl = url.endsWith('/') ? url : url + '/';
-        
-        // Clean up remote path
-        let finalRemotePath = remotePath.replace(/^\.\//, '');
-        if (finalRemotePath.startsWith('/')) {
-            finalRemotePath = finalRemotePath.substring(1);
-        }
-        if (finalRemotePath.endsWith('/')) {
-            finalRemotePath = finalRemotePath.slice(0, -1);
-        }
+        try {
+            let serverUrl = url.endsWith('/') ? url : url + '/';
+            
+            // Clean up remote path
+            let finalRemotePath = remotePath.replace(/^\.\//, '');
+            if (finalRemotePath.startsWith('/')) {
+                finalRemotePath = finalRemotePath.substring(1);
+            }
+            if (finalRemotePath.endsWith('/')) {
+                finalRemotePath = finalRemotePath.slice(0, -1);
+            }
 
-        // For JupyterHub, the user-specific path can be provided in remotePath
-        // and should be appended to the server URL to form the base URL for API calls.
-        if (finalRemotePath) {
-            serverUrl = new URL(finalRemotePath, serverUrl).href;
+            // For JupyterHub, the user-specific path can be provided in remotePath
+            // and should be appended to the server URL to form the base URL for API calls.
+            if (finalRemotePath) {
+                serverUrl = new URL(finalRemotePath, serverUrl).href;
+            }
+            
+            this.jupyterServerUrl = serverUrl.endsWith('/') ? serverUrl : serverUrl + '/';
+            this.jupyterToken = token;
+            // The remote path is now part of the base URL, so we browse from its root.
+            this.remotePath = '/'; 
+            
+            // Clear any existing connection state
+            this.clearCache();
+            this.pendingRequests.clear();
+            
+            this.setupAxiosInstance();
+            
+            // Validate connection by checking if axios instance was created
+            if (!this.axiosInstance) {
+                throw new Error('Failed to create axios instance');
+            }
+            
+            this.isConnected = true;
+            this.refresh();
+            
+            console.log(`Successfully connected to ${this.jupyterServerUrl}`);
+        } catch (error) {
+            console.error('Failed to set connection:', error);
+            this.isConnected = false;
+            this.axiosInstance = null;
+            throw error;
         }
-        
-        this.jupyterServerUrl = serverUrl.endsWith('/') ? serverUrl : serverUrl + '/';
-        this.jupyterToken = token;
-        // The remote path is now part of the base URL, so we browse from its root.
-        this.remotePath = '/'; 
-        this.setupAxiosInstance();
-        this.isConnected = true;
-        this.refresh();
     }
 
     disconnect() {
+        console.log('Disconnecting from Jupyter server...');
+        
+        // Clear all pending requests to prevent ongoing server hits
+        this.pendingRequests.clear();
+        
+        // Clear all timers and cleanup
+        if (this.axiosInstance) {
+            // Cancel any pending axios requests
+            this.axiosInstance.interceptors.request.clear();
+            this.axiosInstance.interceptors.response.clear();
+        }
+        
         this.axiosInstance = null;
         this.isConnected = false;
+        this.clearCache(); // Clear all cache on disconnect
+        
+        // Reset rate limiting
+        this.lastRequestTime = 0;
+        this.requestDelay = 100; // Reset to default
+        
         this.refresh();
+        console.log('Disconnected from Jupyter server');
+    }
+
+    gracefulShutdown(): void {
+        console.log('JupyterHub File Explorer: Performing graceful shutdown...');
+        
+        // Stop any ongoing operations
+        this.pendingRequests.clear();
+        
+        // Clear all caches to free memory
+        this.clearCache();
+        
+        // Disconnect cleanly
+        this.disconnect();
+        
+        console.log('JupyterHub File Explorer: Graceful shutdown completed');
     }
 
     refresh(): void {
+        this.clearCache(); // Clear cache on manual refresh
         this._onDidChangeTreeData.fire(null);
+    }
+
+    toggleHiddenFiles(): void {
+        const config = this.getConfig();
+        const currentValue = config.get<boolean>('showHiddenFiles', false);
+        const newValue = !currentValue;
+        
+        // Update the configuration
+        config.update('showHiddenFiles', newValue, vscode.ConfigurationTarget.Global).then(() => {
+            // Clear cache to force refresh with new filter
+            this.clearCache();
+            this.refresh();
+            
+            // Show user feedback
+            const message = newValue ? 'Hidden files are now visible' : 'Hidden files are now hidden';
+            vscode.window.showInformationMessage(message);
+        });
     }
 
     getTreeItem(element: FileItem): vscode.TreeItem {
@@ -90,7 +202,7 @@ export class FileExplorerProvider implements vscode.TreeDataProvider<FileItem>, 
                 return null;
             }
             
-            const response = await this.axiosInstance.get(`/api/contents${filePath}`);
+            const response = await this.makeRequestWithCache(`/api/contents${filePath}`);
             return response.data;
         } catch (error) {
             return null;
@@ -102,8 +214,39 @@ export class FileExplorerProvider implements vscode.TreeDataProvider<FileItem>, 
             baseURL: this.jupyterServerUrl,
             headers: {
                 'Authorization': `token ${this.jupyterToken}`
-            }
+            },
+            timeout: 30000, // 30 second timeout
+            maxRedirects: 3,
+            validateStatus: (status) => status < 500, // Don't throw for 4xx errors
+            // Connection pooling and keep-alive settings
+            maxContentLength: 100 * 1024 * 1024, // 100MB max content
+            maxBodyLength: 100 * 1024 * 1024, // 100MB max body
         });
+
+        // Add request interceptor for rate limiting
+        this.axiosInstance.interceptors.request.use(async (config) => {
+            await this.enforceRateLimit();
+            return config;
+        });
+
+        // Add response interceptor for error handling
+        this.axiosInstance.interceptors.response.use(
+            (response) => response,
+            (error) => {
+                if (error.code === 'ECONNABORTED') {
+                    console.log('Request timeout - server may be overloaded');
+                    vscode.window.showWarningMessage('Request timeout - server may be overloaded. Consider increasing request delays.');
+                } else if (error.code === 'ENOTFOUND' || error.code === 'ECONNREFUSED') {
+                    console.log('Network error detected, may trigger reconnection');
+                } else if (error.response?.status === 429) {
+                    console.log('Rate limit exceeded - server is being overloaded');
+                    vscode.window.showWarningMessage('Rate limit exceeded. The extension will automatically slow down requests.');
+                    // Increase delay temporarily
+                    this.requestDelay = Math.min(this.requestDelay * 2, 2000);
+                }
+                return Promise.reject(error);
+            }
+        );
     }
 
     public getAxiosInstance(): AxiosInstance | null {
@@ -112,82 +255,252 @@ export class FileExplorerProvider implements vscode.TreeDataProvider<FileItem>, 
 
     private handleConnectionLoss(): void {
         console.log('Connection loss detected, emitting event...');
+        
+        // Prevent multiple connection loss events
+        if (!this.isConnected) {
+            console.log('Connection already marked as lost, skipping duplicate event');
+            return;
+        }
+        
+        this.isConnected = false;
+        this.clearCache(); // Clear cache on connection loss
         this._onConnectionLost.fire();
     }
 
-    private sortItems(items: FileItem[]): FileItem[] {
+    public async checkConnectionHealth(): Promise<boolean> {
+        if (!this.axiosInstance) {
+            return false;
+        }
+        
+        try {
+            // Use a lightweight endpoint to check connectivity
+            const response = await this.axiosInstance.get('api/status', { timeout: 5000 });
+            const isHealthy = response.status === 200;
+            
+            if (isHealthy && !this.isConnected) {
+                this.isConnected = true;
+                console.log('Connection restored');
+            }
+            
+            return isHealthy;
+        } catch (error) {
+            console.log('Health check failed:', error);
+            if (this.isConnected) {
+                this.handleConnectionLoss();
+            }
+            return false;
+        }
+    }
+
+    private handleApiError(error: any, operation: string, showUserMessage: boolean = true): never {
+        let errorMessage = `${operation} failed`;
+        
+        // Apply adaptive rate limiting based on error type
+        this.adaptiveRateLimit(error);
+        
+        if (axios.isAxiosError(error)) {
+            if (error.response) {
+                errorMessage += `: ${error.response.status} - ${error.response.data?.message || error.response.statusText}`;
+            } else if (error.code === 'ECONNABORTED') {
+                errorMessage += ': Request timeout';
+                if (showUserMessage) {
+                    vscode.window.showWarningMessage('Request timeout - server may be overloaded. Slowing down requests.');
+                }
+            } else if (error.code === 'ENOTFOUND' || error.code === 'ECONNREFUSED') {
+                errorMessage += ': Connection failed';
+                this.handleConnectionLoss();
+            } else {
+                errorMessage += `: ${error.message}`;
+            }
+        } else if (error && typeof error === 'object') {
+            // Handle non-axios errors that might have a message property
+            errorMessage += `: ${error.message || 'Unknown error'}`;
+        } else {
+            errorMessage += `: ${String(error) || 'Unknown error'}`;
+        }
+        
+        console.error(errorMessage);
+        if (showUserMessage) {
+            vscode.window.showErrorMessage(errorMessage);
+        }
+        
+        throw new Error(errorMessage);
+    }
+
+    private ensureConnected(): boolean {
+        if (!this.isConnected || !this.axiosInstance) {
+            vscode.window.showErrorMessage('Not connected to Jupyter Server.');
+            return false;
+        }
+        return true;
+    }
+
+    private async enforceRateLimit(): Promise<void> {
+        const now = Date.now();
+        const timeSinceLastRequest = now - this.lastRequestTime;
+        
+        if (timeSinceLastRequest < this.requestDelay) {
+            const waitTime = this.requestDelay - timeSinceLastRequest;
+            console.log(`Rate limiting: waiting ${waitTime}ms before next request`);
+            await new Promise(resolve => setTimeout(resolve, waitTime));
+        }
+        
+        this.lastRequestTime = Date.now();
+    }
+
+    private adaptiveRateLimit(error: any): void {
+        if (error && (error.response?.status === 429 || error.code === 'ECONNABORTED')) {
+            // Increase delay exponentially but cap at 5 seconds
+            this.requestDelay = Math.min(this.requestDelay * 1.5, 5000);
+            console.log(`Adaptive rate limit: increased delay to ${this.requestDelay}ms`);
+        } else if (!error && this.requestDelay > 100) {
+            // Gradually decrease delay on successful requests
+            this.requestDelay = Math.max(this.requestDelay * 0.95, 100);
+        }
+    }
+
+    private getCacheKey(url: string, method: string = 'GET'): string {
+        return `${method}:${url}`;
+    }
+
+    private getFromCache(key: string): any | null {
+        const cached = this.cache.get(key);
+        if (cached && (Date.now() - cached.timestamp) < this.cacheTimeout) {
+            return cached.data;
+        }
+        this.cache.delete(key); // Remove expired cache
+        return null;
+    }
+
+    private setCache(key: string, data: any): void {
+        // Limit cache size to prevent memory issues
+        if (this.cache.size > 100) {
+            const firstKey = this.cache.keys().next().value;
+            if (firstKey) {
+                this.cache.delete(firstKey);
+            }
+        }
+        this.cache.set(key, { data, timestamp: Date.now() });
+    }
+
+    private async makeRequestWithCache(url: string, options: any = {}): Promise<any> {
         const config = vscode.workspace.getConfiguration('jupyterFileExplorer');
+        const enableCaching = config.get<boolean>('enableCaching', true);
+        
+        const method = options.method || 'GET';
+        const cacheKey = this.getCacheKey(url, method);
+        
+        // Check cache for GET requests only and if caching is enabled
+        if (method === 'GET' && enableCaching) {
+            const cached = this.getFromCache(cacheKey);
+            if (cached) {
+                return { data: cached };
+            }
+
+            // Check for pending request to prevent duplicate requests
+            const pendingKey = `pending:${cacheKey}`;
+            if (this.pendingRequests.has(pendingKey)) {
+                console.log(`Deduplicating request for ${url}`);
+                try {
+                    return await this.pendingRequests.get(pendingKey);
+                } catch (error) {
+                    // If pending request failed, continue with new request
+                    this.pendingRequests.delete(pendingKey);
+                }
+            }
+        }
+
+        if (!this.axiosInstance) {
+            throw new Error('Axios instance not initialized');
+        }
+
+        try {
+            const requestPromise = method === 'GET' 
+                ? this.axiosInstance.get(url, options)
+                : this.axiosInstance.request({ url, ...options });
+
+            if (method === 'GET' && enableCaching) {
+                this.pendingRequests.set(`pending:${cacheKey}`, requestPromise);
+            }
+
+            const response = await requestPromise;
+
+            // Validate response
+            if (!response) {
+                throw new Error('Empty response from server');
+            }
+
+            // Cache successful GET responses only if caching is enabled
+            if (method === 'GET' && enableCaching && response.status < 300) {
+                this.setCache(cacheKey, response.data);
+            }
+
+            // Apply adaptive rate limiting on successful requests
+            this.adaptiveRateLimit(null);
+
+            return response;
+        } catch (error) {
+            this.adaptiveRateLimit(error);
+            throw error;
+        } finally {
+            if (method === 'GET' && enableCaching) {
+                this.pendingRequests.delete(`pending:${cacheKey}`);
+            }
+        }
+    }
+
+    private sortItems(items: FileItem[]): FileItem[] {
+        const config = this.getConfig();
         const sortBy = config.get<string>('sortFiles', 'type');
         const sortOrder = config.get<string>('sortOrder', 'asc');
         const isDescending = sortOrder === 'desc';
 
-        return items.sort((a: FileItem, b: FileItem) => {
-            let comparison = 0;
-
-            switch (sortBy) {
-                case 'type':
-                    // Directories first, then files, both alphabetically
-                    if (a.collapsible && !b.collapsible) {
-                        comparison = -1;
-                    } else if (!a.collapsible && b.collapsible) {
-                        comparison = 1;
-                    } else {
-                        // Both same type, sort by name
-                        comparison = a.label.toLowerCase().localeCompare(b.label.toLowerCase());
-                    }
-                    break;
-
-                case 'name':
-                    comparison = a.label.toLowerCase().localeCompare(b.label.toLowerCase());
-                    break;
-
-                case 'size':
-                    // Directories have no size, put them first
-                    if (a.collapsible && !b.collapsible) {
-                        comparison = -1;
-                    } else if (!a.collapsible && b.collapsible) {
-                        comparison = 1;
-                    } else if (!a.collapsible && !b.collapsible) {
-                        // Both files, compare by size
-                        const sizeA = a.fileSize || 0;
-                        const sizeB = b.fileSize || 0;
-                        comparison = sizeA - sizeB;
-                    } else {
-                        // Both directories, sort by name
-                        comparison = a.label.toLowerCase().localeCompare(b.label.toLowerCase());
-                    }
-                    break;
-
-                case 'modified':
-                    // Directories have no modification date, put them first
-                    if (a.collapsible && !b.collapsible) {
-                        comparison = -1;
-                    } else if (!a.collapsible && b.collapsible) {
-                        comparison = 1;
-                    } else if (!a.collapsible && !b.collapsible) {
-                        // Both files, compare by modification date
-                        const dateA = a.lastModified ? a.lastModified.getTime() : 0;
-                        const dateB = b.lastModified ? b.lastModified.getTime() : 0;
-                        comparison = dateA - dateB;
-                    } else {
-                        // Both directories, sort by name
-                        comparison = a.label.toLowerCase().localeCompare(b.label.toLowerCase());
-                    }
-                    break;
-
-                default:
-                    // Default to type sorting
-                    if (a.collapsible && !b.collapsible) {
-                        comparison = -1;
-                    } else if (!a.collapsible && b.collapsible) {
-                        comparison = 1;
-                    } else {
-                        comparison = a.label.toLowerCase().localeCompare(b.label.toLowerCase());
-                    }
+        // Create comparator functions for better performance
+        const comparators = {
+            type: (a: FileItem, b: FileItem) => {
+                if (a.collapsible !== b.collapsible) {
+                    return a.collapsible ? -1 : 1; // Directories first
+                }
+                return a.label.toLowerCase().localeCompare(b.label.toLowerCase());
+            },
+            name: (a: FileItem, b: FileItem) => 
+                a.label.toLowerCase().localeCompare(b.label.toLowerCase()),
+            size: (a: FileItem, b: FileItem) => {
+                if (a.collapsible !== b.collapsible) {
+                    return a.collapsible ? -1 : 1; // Directories first
+                }
+                if (a.collapsible) return 0; // Both directories
+                return (a.fileSize || 0) - (b.fileSize || 0);
+            },
+            modified: (a: FileItem, b: FileItem) => {
+                if (a.collapsible !== b.collapsible) {
+                    return a.collapsible ? -1 : 1; // Directories first
+                }
+                if (a.collapsible) return 0; // Both directories
+                const dateA = a.lastModified?.getTime() || 0;
+                const dateB = b.lastModified?.getTime() || 0;
+                return dateA - dateB;
             }
+        };
 
-            return isDescending ? -comparison : comparison;
+        const comparator = comparators[sortBy as keyof typeof comparators] || comparators.type;
+        
+        return items.sort((a, b) => {
+            const result = comparator(a, b);
+            return isDescending ? -result : result;
         });
+    }
+
+    private filterHiddenFiles(items: FileItem[]): FileItem[] {
+        const config = this.getConfig();
+        const showHiddenFiles = config.get<boolean>('showHiddenFiles', false);
+        
+        if (showHiddenFiles) {
+            return items; // Show all files
+        }
+        
+        // Filter out hidden files (starting with '.')
+        return items.filter(item => !item.label.startsWith('.'));
     }
 
     async getChildren(element?: FileItem): Promise<FileItem[]> {
@@ -197,31 +510,35 @@ export class FileExplorerProvider implements vscode.TreeDataProvider<FileItem>, 
 
         const path = element ? element.uri : this.remotePath;
         const finalPath = path.startsWith('/') ? path.substring(1) : path;
-        // Add a cache-busting parameter to the URL
-        const apiUrl = `api/contents/${finalPath}?t=${new Date().getTime()}`;
+        const apiUrl = `api/contents/${finalPath}`;
 
         try {
-            const response = await this.axiosInstance.get(apiUrl);
-            const items = response.data.content.map((item: any) => new FileItem(item.name, item.type === 'directory', item.path, item));
+            const response = await this.makeRequestWithCache(apiUrl);
             
-            // Sort items based on user configuration
-            return this.sortItems(items);
-        } catch (error) {
-            let errorMessage = `Failed to fetch file list from Jupyter Server. API URL: ${apiUrl}`;
-            if (axios.isAxiosError(error)) {
-                errorMessage += ` Error: ${error.message}`;
-                if (error.response) {
-                    errorMessage += ` Status: ${error.response.status}`;
-                    errorMessage += ` Data: ${JSON.stringify(error.response.data)}`;
-                } else {
-                    // Network error or connection refused - likely connection lost
-                    this.handleConnectionLoss();
-                }
-            } else {
-                errorMessage += ` ${error}`;
+            if (!response || !response.data) {
+                console.warn(`No data received from ${apiUrl}`);
+                return [];
             }
-            console.error(errorMessage);
-            vscode.window.showErrorMessage(errorMessage);
+            
+            if (!response.data.content || !Array.isArray(response.data.content)) {
+                console.warn(`Invalid content structure from ${apiUrl}:`, response.data);
+                return [];
+            }
+            
+            const items = response.data.content.map((item: any) => 
+                new FileItem(item.name, item.type === 'directory', item.path, item)
+            );
+            
+            const filteredItems = this.filterHiddenFiles(items);
+            return this.sortItems(filteredItems);
+        } catch (error) {
+            console.error(`Error fetching children for ${apiUrl}:`, error);
+            try {
+                this.handleApiError(error, `Failed to fetch file list from ${apiUrl}`, true);
+            } catch (handledError) {
+                // Error was handled and thrown, but we need to return empty array for UI
+                return [];
+            }
             return [];
         }
     }
@@ -284,7 +601,7 @@ export class FileExplorerProvider implements vscode.TreeDataProvider<FileItem>, 
         }
     }
 
-    private async fetchFileContent(filePath: string): Promise<string> {
+    public async fetchFileContent(filePath: string): Promise<string> {
         if (!this.isConnected || !this.axiosInstance) {
             throw new Error('Not connected to Jupyter Server.');
         }
@@ -292,7 +609,7 @@ export class FileExplorerProvider implements vscode.TreeDataProvider<FileItem>, 
         const apiUrl = `api/contents/${filePath}`;
         try {
             console.log(`Fetching file content from: ${apiUrl}`);
-            const response = await this.axiosInstance.get(apiUrl);
+            const response = await this.makeRequestWithCache(apiUrl);
             
             if (!response.data) {
                 throw new Error('No data received from server');
@@ -333,14 +650,7 @@ export class FileExplorerProvider implements vscode.TreeDataProvider<FileItem>, 
                 }
             }
         } catch (error: any) {
-            console.error('Failed to fetch file content:', error);
-            if (error.response?.status === 404) {
-                throw new Error('File not found');
-            } else if (error.response?.status === 403) {
-                throw new Error('Permission denied');
-            } else {
-                throw new Error(`Failed to fetch file content: ${error.message}`);
-            }
+            this.handleApiError(error, `Failed to fetch file content for ${filePath}`, false);
         }
     }
 
@@ -512,6 +822,9 @@ export class FileExplorerProvider implements vscode.TreeDataProvider<FileItem>, 
                 type: 'file',
                 format: 'text'
             });
+            
+            // Invalidate cache for this file and its parent directory
+            this.invalidateCacheForPath(filePath);
             vscode.window.showInformationMessage('File saved to Jupyter Server.');
         } catch (error) {
             vscode.window.showErrorMessage('Failed to save file to Jupyter Server.');
@@ -913,6 +1226,7 @@ export class FileExplorerProvider implements vscode.TreeDataProvider<FileItem>, 
             const newFilePath = `${parentPath}/${fileName}`.replace('//', '/');
             const uri = vscode.Uri.parse(`jupyter-remote:${newFilePath}`);
             await this.writeFile(uri, new Uint8Array(Buffer.from('')), { create: true, overwrite: false });
+            this.invalidateCacheForPath(parentPath);
             this.refresh();
         }
     }
@@ -924,6 +1238,7 @@ export class FileExplorerProvider implements vscode.TreeDataProvider<FileItem>, 
             const newFolderPath = `${parentPath}/${folderName}`.replace('//', '/');
             const uri = vscode.Uri.parse(`jupyter-remote:${newFolderPath}`);
             await this.createDirectory(uri);
+            this.invalidateCacheForPath(parentPath);
             this.refresh();
         }
     }
@@ -952,10 +1267,12 @@ export class FileExplorerProvider implements vscode.TreeDataProvider<FileItem>, 
         if (result === 'Delete') {
             const uri = vscode.Uri.parse(`jupyter-remote:${item.uri}`);
             await this.delete(uri, { recursive: true });
+            this.invalidateCacheForPath(item.uri);
             this.refresh();
         } else if (result === 'Force Delete') {
             const uri = vscode.Uri.parse(`jupyter-remote:${item.uri}`);
             await this.forceDelete(uri);
+            this.invalidateCacheForPath(item.uri);
             this.refresh();
         }
     }
@@ -989,9 +1306,40 @@ export class FileExplorerProvider implements vscode.TreeDataProvider<FileItem>, 
         await this.newFolder();
     }
 
+    private async processFileOperation(
+        files: vscode.Uri[], 
+        targetPath: string, 
+        operation: 'upload' | 'download',
+        operationFn: (filePath: string, targetPath: string) => Promise<void>
+    ): Promise<void> {
+        let successCount = 0;
+        let errorCount = 0;
+
+        const operationName = operation === 'upload' ? 'upload' : 'download';
+
+        for (const fileUri of files) {
+            try {
+                await operationFn(fileUri.fsPath, targetPath);
+                successCount++;
+            } catch (error) {
+                console.error(`Failed to ${operationName} ${path.basename(fileUri.fsPath)}:`, error);
+                vscode.window.showErrorMessage(`Failed to ${operationName} ${path.basename(fileUri.fsPath)}: ${error}`);
+                errorCount++;
+            }
+        }
+
+        this.refresh();
+
+        if (successCount > 0) {
+            vscode.window.showInformationMessage(`Successfully ${operationName}ed ${successCount} file(s).`);
+        }
+        if (errorCount > 0) {
+            vscode.window.showWarningMessage(`Failed to ${operationName} ${errorCount} file(s).`);
+        }
+    }
+
     async uploadFile(targetDirectory?: FileItem): Promise<void> {
-        if (!this.isConnected || !this.axiosInstance) {
-            vscode.window.showErrorMessage('Not connected to Jupyter Server.');
+        if (!this.ensureConnected()) {
             return;
         }
 
@@ -1016,8 +1364,8 @@ export class FileExplorerProvider implements vscode.TreeDataProvider<FileItem>, 
                 await this.uploadSingleFile(fileUri.fsPath, parentPath);
                 successCount++;
             } catch (error) {
-                console.error(`Failed to upload ${path.basename(fileUri.fsPath)}:`, error);
-                vscode.window.showErrorMessage(`Failed to upload ${path.basename(fileUri.fsPath)}: ${error}`);
+                const fileName = path.basename(fileUri.fsPath);
+                this.handleApiError(error, `Failed to upload ${fileName}`, false);
                 errorCount++;
             }
         }
@@ -1033,8 +1381,7 @@ export class FileExplorerProvider implements vscode.TreeDataProvider<FileItem>, 
     }
 
     async uploadFolder(targetDirectory?: FileItem): Promise<void> {
-        if (!this.isConnected || !this.axiosInstance) {
-            vscode.window.showErrorMessage('Not connected to Jupyter Server.');
+        if (!this.ensureConnected()) {
             return;
         }
 
@@ -1078,8 +1425,7 @@ export class FileExplorerProvider implements vscode.TreeDataProvider<FileItem>, 
     }
 
     async downloadFile(item: FileItem): Promise<void> {
-        if (!this.isConnected || !this.axiosInstance) {
-            vscode.window.showErrorMessage('Not connected to Jupyter Server.');
+        if (!this.ensureConnected()) {
             return;
         }
 
@@ -1101,7 +1447,7 @@ export class FileExplorerProvider implements vscode.TreeDataProvider<FileItem>, 
             const cleanPath = item.uri.startsWith('/') ? item.uri.substring(1) : item.uri;
             const apiUrl = `api/contents/${cleanPath}`;
             
-            const response = await this.axiosInstance.get(apiUrl);
+            const response = await this.makeRequestWithCache(apiUrl);
             
             if (response.data.type === 'file') {
                 const content = response.data.content;
@@ -1119,8 +1465,7 @@ export class FileExplorerProvider implements vscode.TreeDataProvider<FileItem>, 
                 vscode.window.showErrorMessage('Selected item is not a file.');
             }
         } catch (error) {
-            console.error('Download failed:', error);
-            vscode.window.showErrorMessage(`Failed to download ${item.label}: ${error}`);
+            this.handleApiError(error, `Failed to download ${item.label}`, false);
         }
     }
 
@@ -1544,6 +1889,7 @@ export class FileItem extends vscode.TreeItem {
         const fileName = this.label as string;
         const extension = fileName.split('.').pop()?.toLowerCase() || '';
         const lowerFileName = fileName.toLowerCase();
+        const isHidden = fileName.startsWith('.');
         
         // Special files first
         if (lowerFileName === 'readme.md' || lowerFileName === 'readme') {
@@ -1568,65 +1914,68 @@ export class FileItem extends vscode.TreeItem {
             return new vscode.ThemeIcon('tools', new vscode.ThemeColor('charts.purple'));
         }
         
+        // For hidden files, use a dimmed color
+        const iconColor = isHidden ? new vscode.ThemeColor('charts.gray') : undefined;
+        
         // Extension-based icons with colors
         switch (extension) {
             case 'py':
-                return new vscode.ThemeIcon('symbol-class', new vscode.ThemeColor('charts.blue'));
+                return new vscode.ThemeIcon('symbol-class', iconColor || new vscode.ThemeColor('charts.blue'));
             case 'js':
             case 'jsx':
-                return new vscode.ThemeIcon('symbol-function', new vscode.ThemeColor('charts.yellow'));
+                return new vscode.ThemeIcon('symbol-function', iconColor || new vscode.ThemeColor('charts.yellow'));
             case 'ts':
             case 'tsx':
-                return new vscode.ThemeIcon('symbol-interface', new vscode.ThemeColor('charts.blue'));
+                return new vscode.ThemeIcon('symbol-interface', iconColor || new vscode.ThemeColor('charts.blue'));
             case 'json':
-                return new vscode.ThemeIcon('json', new vscode.ThemeColor('charts.green'));
+                return new vscode.ThemeIcon('json', iconColor || new vscode.ThemeColor('charts.green'));
             case 'ipynb':
-                return new vscode.ThemeIcon('notebook', new vscode.ThemeColor('charts.orange'));
+                return new vscode.ThemeIcon('notebook', iconColor || new vscode.ThemeColor('charts.orange'));
             case 'md':
             case 'markdown':
-                return new vscode.ThemeIcon('markdown', new vscode.ThemeColor('charts.blue'));
+                return new vscode.ThemeIcon('markdown', iconColor || new vscode.ThemeColor('charts.blue'));
             case 'sql':
-                return new vscode.ThemeIcon('database', new vscode.ThemeColor('charts.purple'));
+                return new vscode.ThemeIcon('database', iconColor || new vscode.ThemeColor('charts.purple'));
             case 'toml':
-                return new vscode.ThemeIcon('settings-gear', new vscode.ThemeColor('charts.gray'));
+                return new vscode.ThemeIcon('settings-gear', iconColor || new vscode.ThemeColor('charts.gray'));
             case 'yaml':
             case 'yml':
-                return new vscode.ThemeIcon('symbol-structure', new vscode.ThemeColor('charts.gray'));
+                return new vscode.ThemeIcon('symbol-structure', iconColor || new vscode.ThemeColor('charts.gray'));
             case 'html':
-                return new vscode.ThemeIcon('code', new vscode.ThemeColor('charts.red'));
+                return new vscode.ThemeIcon('code', iconColor || new vscode.ThemeColor('charts.red'));
             case 'css':
             case 'scss':
             case 'sass':
-                return new vscode.ThemeIcon('symbol-color', new vscode.ThemeColor('charts.blue'));
+                return new vscode.ThemeIcon('symbol-color', iconColor || new vscode.ThemeColor('charts.blue'));
             case 'xml':
-                return new vscode.ThemeIcon('symbol-structure', new vscode.ThemeColor('charts.green'));
+                return new vscode.ThemeIcon('symbol-structure', iconColor || new vscode.ThemeColor('charts.green'));
             case 'csv':
-                return new vscode.ThemeIcon('graph', new vscode.ThemeColor('charts.green'));
+                return new vscode.ThemeIcon('graph', iconColor || new vscode.ThemeColor('charts.green'));
             case 'png':
             case 'jpg':
             case 'jpeg':
             case 'gif':
             case 'svg':
             case 'webp':
-                return new vscode.ThemeIcon('file-media', new vscode.ThemeColor('charts.purple'));
+                return new vscode.ThemeIcon('file-media', iconColor || new vscode.ThemeColor('charts.purple'));
             case 'pdf':
-                return new vscode.ThemeIcon('file-pdf', new vscode.ThemeColor('charts.red'));
+                return new vscode.ThemeIcon('file-pdf', iconColor || new vscode.ThemeColor('charts.red'));
             case 'zip':
             case 'tar':
             case 'gz':
             case 'rar':
-                return new vscode.ThemeIcon('file-zip', new vscode.ThemeColor('charts.orange'));
+                return new vscode.ThemeIcon('file-zip', iconColor || new vscode.ThemeColor('charts.orange'));
             case 'sh':
             case 'bash':
-                return new vscode.ThemeIcon('terminal', new vscode.ThemeColor('charts.green'));
+                return new vscode.ThemeIcon('terminal', iconColor || new vscode.ThemeColor('charts.green'));
             case 'log':
-                return new vscode.ThemeIcon('output', new vscode.ThemeColor('charts.gray'));
+                return new vscode.ThemeIcon('output', iconColor || new vscode.ThemeColor('charts.gray'));
             case 'txt':
-                return new vscode.ThemeIcon('file-text', new vscode.ThemeColor('charts.gray'));
+                return new vscode.ThemeIcon('file-text', iconColor || new vscode.ThemeColor('charts.gray'));
             case 'lock':
-                return new vscode.ThemeIcon('lock', new vscode.ThemeColor('charts.orange'));
+                return new vscode.ThemeIcon('lock', iconColor || new vscode.ThemeColor('charts.orange'));
             default:
-                return new vscode.ThemeIcon('file', new vscode.ThemeColor('charts.gray'));
+                return new vscode.ThemeIcon('file', iconColor || new vscode.ThemeColor('charts.gray'));
         }
     }
     
@@ -1642,28 +1991,10 @@ export class FileItem extends vscode.TreeItem {
 }
 
 export class JupyterContentProvider implements vscode.TextDocumentContentProvider {
-    private axiosInstance: AxiosInstance | null = null;
-
     constructor(private fileExplorerProvider: FileExplorerProvider) {}
 
-    setAxiosInstance(axiosInstance: AxiosInstance) {
-        this.axiosInstance = axiosInstance;
-    }
-
     async provideTextDocumentContent(uri: vscode.Uri, token: vscode.CancellationToken): Promise<string> {
-        if (!this.axiosInstance) {
-            throw new Error('Not connected to Jupyter Server.');
-        }
-
-        const filePath = uri.path;
-        const apiUrl = `api/contents${filePath}`;
-
-        try {
-            const response = await this.axiosInstance.get(apiUrl);
-            return response.data.content;
-        } catch (error) {
-            console.error('Failed to fetch file content:', error);
-            throw new Error('Failed to fetch file content from Jupyter Server.');
-        }
+        // Leverage the existing fetchFileContent method with caching and optimizations
+        return this.fileExplorerProvider.fetchFileContent(uri.path.slice(1));
     }
 }
